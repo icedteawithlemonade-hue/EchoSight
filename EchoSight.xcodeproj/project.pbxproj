@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		21B1B03D2F2AD62700E74C89 /* EchoSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		21B1B05B2F2B39A500E74C89 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +35,7 @@
 			children = (
 				21B1B03F2F2AD62700E74C89 /* EchoSight */,
 				21B1B03E2F2AD62700E74C89 /* Products */,
+				21B1B05B2F2B39A500E74C89 /* Info.plist */,
 			);
 			sourceTree = "<group>";
 		};
@@ -251,8 +253,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P23S7NV8Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = camera;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Enable Microphone Usage";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -282,8 +288,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P23S7NV8Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = camera;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Enable Microphone Usage";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

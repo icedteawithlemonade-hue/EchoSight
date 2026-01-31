@@ -28,17 +28,17 @@ struct ContentView: View {
                         showCamera = true
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PressableButtonStyle(prominent: true))
 
                 Button("Read aloud") {
                     print("Button 2 tapped")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PressableButtonStyle(prominent: true))
 
                 NavigationLink("Go to Second Screen") {
                     SecondView()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(PressableButtonStyle(prominent: false))
 
                 if showCamera {
                     CameraPreview(session: cameraManager.session)

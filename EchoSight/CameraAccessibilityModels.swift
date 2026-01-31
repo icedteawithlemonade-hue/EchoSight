@@ -214,7 +214,7 @@ final class AnnouncementController: ObservableObject {
     private var pendingPriority: Bool = false
     private var pendingWork: DispatchWorkItem?
 
-    init(announcer: SpeechAnnouncer = SpeechAnnouncer()) {
+    init(announcer: SpeechAnnouncer = SpeechAnnouncer.shared) {
         self.announcer = announcer
         announcer.onQueueFinished = { [weak self] in
             self?.handleFinished()

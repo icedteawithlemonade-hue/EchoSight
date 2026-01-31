@@ -25,12 +25,12 @@ struct MicVisualizerView: View {
                         meter.requestPermissionAndStart()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PressableButtonStyle(prominent: true))
 
                 Button("Calibrate") {
                     meter.calibrate(seconds: 2.0)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(PressableButtonStyle(prominent: false))
             }
 
             VStack(alignment: .leading, spacing: 8) {

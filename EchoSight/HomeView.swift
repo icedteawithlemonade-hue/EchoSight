@@ -325,7 +325,7 @@ private struct TileLink: View {
                 )
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedbackButtonStyle())
     }
 }
 
@@ -406,7 +406,7 @@ private struct ActionTile: View {
                 )
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedbackButtonStyle())
     }
 }
 
@@ -549,46 +549,6 @@ private struct DiagnosticsOverlay: View {
     }
 }
 
-private struct PressableButtonStyle: ButtonStyle {
-    let prominent: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline.weight(.semibold))
-            .padding(.vertical, 10)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(backgroundColor(pressed: configuration.isPressed))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(borderColor, lineWidth: prominent ? 0 : 1)
-            )
-            .foregroundStyle(foregroundColor)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-
-    @Environment(\.appThemeColor) private var appThemeColor
-
-    private var borderColor: Color {
-        appThemeColor.opacity(0.35)
-    }
-
-    private func backgroundColor(pressed: Bool) -> Color {
-        if prominent {
-            return appThemeColor.opacity(pressed ? 0.75 : 1.0)
-        }
-        return pressed ? appThemeColor.opacity(0.15) : Color(.systemBackground)
-    }
-
-    private var foregroundColor: Color {
-        prominent ? .white : .primary
-    }
-}
-
 struct ObjectDetectionPage: View {
     @StateObject private var camera = CameraManager()
     @StateObject private var viewModel = ObjectDetectionViewModel()
@@ -653,11 +613,51 @@ struct TextReaderPage: View {
     @State private var speechRate: Double = 0.5
     @State private var speechPitch: Double = 1.0
     @State private var speechVolume: Double = 1.0
+    @State private var selectedLens: CameraLens = .telephoto
+    @State private var zoomFactor: Double = 1.0
+    @State private var zoomWorkItem: DispatchWorkItem?
+    @State private var lastHapticStop: Double?
+    @State private var focusLocked: Bool = false
+    @State private var torchOn: Bool = false
+    @State private var magnifyPreviousZoom: Double?
+    private let zoomStops: [Double] = [1, 2, 4, 8]
+    private let telephotoBaseEquivalent: Double = 4.0
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                CameraPreviewCard(camera: camera, title: "Text Reader Preview")
+                ZStack(alignment: .topLeading) {
+                    CameraPreviewCard(camera: camera, title: "Text Reader Preview")
+                    HStack(spacing: 8) {
+                        Text("\(selectedLens == .telephoto ? "Tele" : "Wide") • \(String(format: "%.1f", zoomFactor))x")
+                            .font(.caption.weight(.semibold))
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 10)
+                            .background(.ultraThinMaterial, in: Capsule())
+                        Spacer()
+                        Button {
+                            focusLocked.toggle()
+                            camera.setFocusLocked(focusLocked)
+                        } label: {
+                            Image(systemName: focusLocked ? "lock.fill" : "lock.open")
+                        }
+                        .buttonStyle(PressableButtonStyle(prominent: false))
+                        Button {
+                            torchOn.toggle()
+                            camera.setTorch(enabled: torchOn)
+                        } label: {
+                            Image(systemName: torchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                        }
+                        .buttonStyle(PressableButtonStyle(prominent: false))
+                    }
+                    .padding(12)
+                }
+                .onTapGesture(count: 2) {
+                    let minZoom = minZoomAllowed
+                    let target = zoomFactor < (minZoom + maxZoomAllowed) / 2 ? maxZoomAllowed : minZoom
+                    zoomFactor = target
+                    camera.setZoom(CGFloat(deviceZoomFactor(for: target)), ramp: true)
+                }
 
                 Button {
                     viewModel.capture()
@@ -665,6 +665,74 @@ struct TextReaderPage: View {
                     Label("Capture Text", systemImage: "camera.circle")
                 }
                 .buttonStyle(PressableButtonStyle(prominent: true))
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Lens")
+                            .font(.headline)
+                        Spacer()
+                        Picker("Lens", selection: $selectedLens) {
+                            ForEach(CameraLens.allCases) { lens in
+                                Text(lens.title).tag(lens)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 220)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Zoom")
+                                .font(.headline)
+                            Spacer()
+                            Text(String(format: "%.1fx", zoomFactor))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $zoomFactor, in: minZoomAllowed...maxZoomAllowed, step: 0.05)
+                            .onChange(of: zoomFactor) { newValue in
+                                scheduleZoomUpdate(newValue)
+                                handleZoomHaptics(newValue)
+                            }
+                        HStack {
+                            ForEach(zoomStops, id: \.self) { stop in
+                                Text("\(Int(stop))x")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                if stop != zoomStops.last {
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+                    Button("Magnify") { }
+                        .buttonStyle(PressableButtonStyle(prominent: false))
+                        .onLongPressGesture(minimumDuration: 0.2, pressing: { isPressing in
+                            if isPressing {
+                                if magnifyPreviousZoom == nil {
+                                    magnifyPreviousZoom = zoomFactor
+                                }
+                                let target = maxZoomAllowed
+                                zoomFactor = target
+                                camera.setZoom(CGFloat(deviceZoomFactor(for: target)), ramp: true)
+                            } else if let previous = magnifyPreviousZoom {
+                                zoomFactor = previous
+                                camera.setZoom(CGFloat(deviceZoomFactor(for: previous)), ramp: true)
+                                magnifyPreviousZoom = nil
+                            }
+                        }, perform: {})
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(.systemBackground))
+                        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(.secondary.opacity(0.12), lineWidth: 1)
+                        )
+                )
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Recognized Text")
@@ -724,15 +792,32 @@ struct TextReaderPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
-            camera.configure()
+            camera.configure(lens: selectedLens)
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.update(sampleBuffer: sample)
             }
             camera.start()
+            camera.applyContinuousFocusAndExposure()
+            let initial = minZoomAllowed
+            zoomFactor = initial
+            camera.setZoom(CGFloat(deviceZoomFactor(for: initial)), ramp: false)
         }
         .onChange(of: viewModel.recognizedText) { newValue in
             if audioFeedback {
                 speech.speak(newValue, rate: speechRate, pitch: speechPitch, volume: speechVolume, debounce: true)
+            }
+        }
+        .onChange(of: selectedLens) { newValue in
+            camera.switchLens(to: newValue)
+            let clamped = min(max(zoomFactor, minZoomAllowed), maxZoomAllowed)
+            zoomFactor = clamped
+            camera.setZoom(CGFloat(deviceZoomFactor(for: clamped)), ramp: false)
+        }
+        .onChange(of: camera.maxZoomFactor) { _ in
+            let clamped = min(max(zoomFactor, minZoomAllowed), maxZoomAllowed)
+            if clamped != zoomFactor {
+                zoomFactor = clamped
+                camera.setZoom(CGFloat(deviceZoomFactor(for: clamped)), ramp: false)
             }
         }
         .onChange(of: speechRate) { _ in
@@ -752,6 +837,50 @@ struct TextReaderPage: View {
             camera.stop()
             speech.stop()
         }
+    }
+
+    private var maxZoomAllowed: Double {
+        let deviceMax = Double(camera.maxZoomFactor)
+        if selectedLens == .telephoto {
+            return min(8.0, max(minZoomAllowed, telephotoBaseEquivalent * deviceMax))
+        }
+        return min(8.0, max(1.0, deviceMax))
+    }
+
+    private var minZoomAllowed: Double {
+        selectedLens == .telephoto ? telephotoBaseEquivalent : 1.0
+    }
+
+    private func scheduleZoomUpdate(_ value: Double) {
+        zoomWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            camera.setZoom(CGFloat(deviceZoomFactor(for: value)), ramp: true)
+        }
+        zoomWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    private func handleZoomHaptics(_ value: Double) {
+        let threshold = 0.08
+        for stop in zoomStops where stop >= minZoomAllowed && stop <= maxZoomAllowed {
+            if abs(value - stop) < threshold, lastHapticStop != stop {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.prepare()
+                generator.impactOccurred()
+                lastHapticStop = stop
+                return
+            }
+        }
+        if zoomStops.allSatisfy({ abs(value - $0) >= threshold }) {
+            lastHapticStop = nil
+        }
+    }
+
+    private func deviceZoomFactor(for uiZoom: Double) -> Double {
+        if selectedLens == .telephoto {
+            return max(1.0, uiZoom / telephotoBaseEquivalent)
+        }
+        return max(1.0, uiZoom)
     }
 }
 
@@ -1104,7 +1233,7 @@ struct MorseInputPage: View {
                         Button("Reset") {
                             resetOutput()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(PressableButtonStyle(prominent: false))
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Raw stream")
@@ -1337,7 +1466,7 @@ struct MorseOutputPage: View {
                                 Image(systemName: "backward.fill")
                                     .font(.title3)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(PressableButtonStyle(prominent: false))
 
                             Button {
                                 togglePlayback(words: words)
@@ -1345,7 +1474,7 @@ struct MorseOutputPage: View {
                                 Image(systemName: playbackStatus == .playing ? "pause.fill" : "play.fill")
                                     .font(.title3)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(PressableButtonStyle(prominent: true))
 
                             Button {
                                 moveToNextWord(in: words)
@@ -1353,7 +1482,7 @@ struct MorseOutputPage: View {
                                 Image(systemName: "forward.fill")
                                     .font(.title3)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(PressableButtonStyle(prominent: false))
                         }
                         Spacer()
                     }
@@ -1404,7 +1533,7 @@ struct MorseOutputPage: View {
                                                     .fill(selectedWordIndex == idx ? appThemeColor.opacity(0.2) : Color.secondary.opacity(0.12))
                                             )
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(PressFeedbackButtonStyle())
                                 }
                             }
                         }
@@ -2156,7 +2285,7 @@ final class AudioMeter: ObservableObject {
 }
 
 struct BrowserPage: View {
-    @State private var urlText: String = ""
+    @State private var urlText: String = "https://www.google.com"
     @FocusState private var urlFieldFocused: Bool
     @State private var textSize: Double = 16
     @State private var lineSpacing: Double = 1.4
@@ -2177,6 +2306,7 @@ struct BrowserPage: View {
         "https://webaim.org/"
     ]
     @StateObject private var readerModel = WebReaderModel()
+    @State private var didInitialLoad: Bool = false
 
     var body: some View {
         ScrollView {
@@ -2210,54 +2340,16 @@ struct BrowserPage: View {
                         }
                         .buttonStyle(PressableButtonStyle(prominent: false))
                     }
-                    HStack(spacing: 10) {
-                        Button {
-                            loadFromURLText()
-                        } label: {
-                            Image(systemName: "arrow.right.circle.fill")
-                            Text("Go")
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            Spacer(minLength: 0)
+                            browserButtonRow
+                            Spacer(minLength: 0)
                         }
-                        .buttonStyle(PressableButtonStyle(prominent: true))
-
-                        Button {
-                            readerModel.goBack()
-                        } label: {
-                            Image(systemName: "chevron.left")
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            browserButtonRow
+                                .padding(.horizontal, 4)
                         }
-                        .buttonStyle(PressableButtonStyle(prominent: false))
-                        .disabled(!readerModel.canGoBack)
-
-                        Button {
-                            readerModel.goForward()
-                        } label: {
-                            Image(systemName: "chevron.right")
-                        }
-                        .buttonStyle(PressableButtonStyle(prominent: false))
-                        .disabled(!readerModel.canGoForward)
-
-                        Button {
-                            readerModel.reload()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .buttonStyle(PressableButtonStyle(prominent: false))
-
-                        Button {
-                            readerModel.stop()
-                        } label: {
-                            Image(systemName: "xmark")
-                        }
-                        .buttonStyle(PressableButtonStyle(prominent: false))
-                        .disabled(!readerModel.isLoading)
-
-                        Spacer()
-
-                        Button {
-                            saveCurrentURL()
-                        } label: {
-                            Image(systemName: "bookmark")
-                        }
-                        .buttonStyle(PressableButtonStyle(prominent: true))
                     }
                 }
                 .padding(16)
@@ -2319,7 +2411,7 @@ struct BrowserPage: View {
                                         Spacer()
                                     }
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(PressFeedbackButtonStyle())
 
                                 Button {
                                     removeSavedSite(site)
@@ -2486,6 +2578,14 @@ struct BrowserPage: View {
                 readerModel.restartSpeaking(rate: Float(newValue))
             }
         }
+        .onAppear {
+            guard !didInitialLoad else { return }
+            didInitialLoad = true
+            if urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                urlText = "https://www.google.com"
+            }
+            loadFromURLText()
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -2513,6 +2613,56 @@ struct BrowserPage: View {
         guard let normalized = normalizedURL(from: urlText) else { return }
         urlText = normalized
         readerModel.load(urlString: normalized)
+    }
+
+    @ViewBuilder
+    private var browserButtonRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                loadFromURLText()
+            } label: {
+                Text("Go")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: true))
+
+            Button {
+                readerModel.goBack()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: false))
+            .disabled(!readerModel.canGoBack)
+
+            Button {
+                readerModel.goForward()
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: false))
+            .disabled(!readerModel.canGoForward)
+
+            Button {
+                readerModel.reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: false))
+
+            Button {
+                readerModel.stop()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: false))
+            .disabled(!readerModel.isLoading)
+
+            Button {
+                saveCurrentURL()
+            } label: {
+                Image(systemName: "bookmark")
+            }
+            .buttonStyle(PressableButtonStyle(prominent: true))
+        }
     }
 
     private func normalizedURL(from text: String) -> String? {
@@ -2913,6 +3063,10 @@ struct SettingsAccessibilityPage: View {
 struct AccessibilityPage: View {
     @AppStorage("accessibility.simplifiedUI") private var simplifiedUI: Bool = false
     @AppStorage("accessibility.simplifiedUI.includeRed") private var simplifyRedTiles: Bool = false
+    @AppStorage(SpeechSettings.voiceIdentifierKey) private var speechVoiceIdentifier: String = SpeechSettings.autoVoiceIdentifier
+    @AppStorage(SpeechSettings.rateKey) private var speechRate: Double = 0.5
+    @AppStorage(SpeechSettings.pitchKey) private var speechPitch: Double = 1.0
+    @AppStorage(SpeechSettings.volumeKey) private var speechVolume: Double = 0.9
 
     var body: some View {
         Form {
@@ -2932,9 +3086,47 @@ struct AccessibilityPage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            Section("Speech") {
+                Picker("Voice", selection: $speechVoiceIdentifier) {
+                    Text("Auto (best match)").tag(SpeechSettings.autoVoiceIdentifier)
+                    ForEach(availableVoices(), id: \.identifier) { voice in
+                        Text("\(voice.name) (\(voice.language))")
+                            .tag(voice.identifier)
+                    }
+                }
+                MorseSettingSlider(title: "Speech rate", value: $speechRate, range: 0.3...0.7, suffix: "")
+                MorseSettingSlider(title: "Speech pitch", value: $speechPitch, range: 0.7...1.3, suffix: "")
+                MorseSettingSlider(title: "Speech volume", value: $speechVolume, range: 0.2...1.0, suffix: "")
+                Button("Test Voice") {
+                    SpeechAnnouncer.shared.testVoice()
+                }
+                .buttonStyle(PressableButtonStyle(prominent: true))
+                Text("Tip: Download enhanced voices in Settings → Accessibility → Spoken Content → Voices.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("Accessibility")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: speechRate) { _ in
+            SpeechAnnouncer.shared.restartIfSpeaking(rate: speechRate, pitch: speechPitch, volume: speechVolume)
+        }
+        .onChange(of: speechPitch) { _ in
+            SpeechAnnouncer.shared.restartIfSpeaking(rate: speechRate, pitch: speechPitch, volume: speechVolume)
+        }
+        .onChange(of: speechVolume) { _ in
+            SpeechAnnouncer.shared.restartIfSpeaking(rate: speechRate, pitch: speechPitch, volume: speechVolume)
+        }
+    }
+
+    private func availableVoices() -> [AVSpeechSynthesisVoice] {
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+        let locale = Locale.current.identifier
+        let language = Locale.current.languageCode ?? "en"
+        let preferred = voices.filter { $0.language == locale }
+        let fallback = voices.filter { $0.language.hasPrefix(language) }
+        let list = preferred.isEmpty ? fallback : preferred
+        return list.sorted { $0.name < $1.name }
     }
 }
 
@@ -2967,8 +3159,6 @@ struct SettingsPage: View {
     @AppStorage("startup.open.enabled") private var openOnStartup: Bool = false
     @AppStorage("startup.open.tile") private var startupTile: String = StartupTile.none.rawValue
     @AppStorage("theme.color") private var themeColorName: String = ThemeColor.blue.rawValue
-    @AppStorage(SpeechSettings.voiceIdentifierKey) private var speechVoiceIdentifier: String = SpeechSettings.autoVoiceIdentifier
-    @AppStorage(SpeechSettings.rateKey) private var speechRate: Double = 0.5
 
     var body: some View {
         Form {
@@ -2988,22 +3178,6 @@ struct SettingsPage: View {
                     }
                 }
             }
-            Section("Speech") {
-                Picker("Voice", selection: $speechVoiceIdentifier) {
-                    Text("Auto (best match)").tag(SpeechSettings.autoVoiceIdentifier)
-                    ForEach(availableVoices(), id: \.identifier) { voice in
-                        Text("\(voice.name) (\(voice.language))")
-                            .tag(voice.identifier)
-                    }
-                }
-                MorseSettingSlider(title: "Speech rate", value: $speechRate, range: 0.3...0.7, suffix: "")
-                Button("Test Voice") {
-                    SpeechAnnouncer.shared.testVoice()
-                }
-                Text("Tip: Download enhanced voices in Settings → Accessibility → Spoken Content → Voices.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
             Section("Startup") {
                 Toggle("Open tile on start-up", isOn: $openOnStartup)
                 if openOnStartup {
@@ -3020,16 +3194,6 @@ struct SettingsPage: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func availableVoices() -> [AVSpeechSynthesisVoice] {
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        let locale = Locale.current.identifier
-        let language = Locale.current.languageCode ?? "en"
-        let preferred = voices.filter { $0.language == locale }
-        let fallback = voices.filter { $0.language.hasPrefix(language) }
-        let list = preferred.isEmpty ? fallback : preferred
-        return list.sorted { $0.name < $1.name }
     }
 }
 
@@ -3072,8 +3236,11 @@ struct TutorialHubPage: View {
                 TileLink(title: "Camera", subtitle: "Using camera recognition", systemImage: "camera.viewfinder", destination: AnyView(CameraTutorialPage()))
                 TileLink(title: "Mic", subtitle: "Voice and listening tips", systemImage: "mic.fill", destination: AnyView(MicTutorialPage()))
                 TileLink(title: "Browser", subtitle: "Browsing with EchoSight", systemImage: "safari.fill", destination: AnyView(BrowserTutorialPage()))
-                TileLink(title: "ASL Alphabet", subtitle: "Learn and practice", systemImage: "hand.raised.fill", destination: AnyView(ASLTutorialPage()))
+                TileLink(title: "ASL Learning", subtitle: "Learn and practice", systemImage: "hand.raised.fill", destination: AnyView(ASLTutorialPage()))
                 TileLink(title: "Morse Communicator", subtitle: "Send and receive signals", systemImage: "antenna.radiowaves.left.and.right", destination: AnyView(MorseTutorialPage()))
+                TileLink(title: "Settings", subtitle: "Customize EchoSight", systemImage: "gearshape.fill", destination: AnyView(SettingsTutorialPage()))
+                TileLink(title: "Accessibility", subtitle: "Simplified UI and devices", systemImage: "figure.stand.line.dotted.figure.stand", destination: AnyView(AccessibilityTutorialPage()))
+                TileLink(title: "About", subtitle: "App info and version", systemImage: "info.circle.fill", destination: AnyView(AboutTutorialPage()))
             }
             .padding()
         }
@@ -3082,9 +3249,24 @@ struct TutorialHubPage: View {
     }
 }
 
-// Replace the entire ASLTutorialPage with the new implementation
 struct ASLTutorialPage: View {
     private let tips: [(title: String, text: String)] = [
+        (
+            title: "What’s Inside ASL Learning",
+            text: "Use the Alphabet, Numbers, and Phrases tiles to learn handshapes and spelling. The ASL Tips tile gives quick guidance on clarity and etiquette."
+        ),
+        (
+            title: "Alphabet Practice",
+            text: "Swipe through A–Z. Each tile shows the handshape for that letter. Go slowly and match hand orientation and finger shape."
+        ),
+        (
+            title: "Numbers Practice",
+            text: "Swipe through the numbers. Focus on handshape and movement. Consistent height and spacing improves readability."
+        ),
+        (
+            title: "Phrases",
+            text: "Tap a phrase to see each word spelled with letter tiles. Scroll horizontally to view every letter."
+        ),
         (
             title: "Topic-Comment Structure",
             text: "In ASL, sentences often follow topic first, then comment. For example, \"Your name what?\" instead of \"What is your name?\" This helps sentences feel natural in sign language."
@@ -3154,13 +3336,43 @@ struct ASLTutorialPage: View {
 }
 
 struct CameraTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "Object Detection",
+            text: "Point the camera at your surroundings. The app announces the detected object and whether it is left, right, or ahead. Keep the phone steady and use good lighting."
+        ),
+        (
+            title: "Text Reader (OCR)",
+            text: "Tap Capture to read text. Hold the device steady and keep text flat and well-lit for best results."
+        ),
+        (
+            title: "Currency Identifier",
+            text: "Hold a bill flat and centered in the frame. The app will announce the denomination when it stabilizes."
+        ),
+        (
+            title: "Nearby People Detection",
+            text: "Detects people and announces their relative position only (left/center/right). No face recognition or identity tracking."
+        ),
+        (
+            title: "Crosswalk Signal Detection",
+            text: "Aim at the pedestrian signal. The app announces “Walk” or “Do Not Walk.”"
+        ),
+        (
+            title: "Path Guidance (Experimental)",
+            text: "Provides simple left/right guidance. Use as a rough hint only and do not rely on it for safety."
+        ),
+        (
+            title: "Privacy",
+            text: "All processing is on-device. No images are uploaded or stored."
+        )
+    ]
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Camera Overview").font(.title.bold())
-                Text("• Point the camera at an object or text.\n• Ensure good lighting for best results.\n• Keep your hands steady; use a stand if needed.\n• Try different distances to improve recognition accuracy.")
-                Text("Tips").font(.headline)
-                Text("• Avoid glare or reflections.\n• Tap to focus if the subject appears blurry.\n• Use the rear camera for better quality.")
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
             }
             .padding()
         }
@@ -3170,13 +3382,39 @@ struct CameraTutorialPage: View {
 }
 
 struct MicTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "Start / Stop",
+            text: "Tap Start to begin listening. The mic requests permission the first time. Tap Stop anytime to end capture."
+        ),
+        (
+            title: "Live Captions",
+            text: "Speech appears as rolling captions. Speak clearly and keep the phone nearby for best results."
+        ),
+        (
+            title: "Sound Alerts",
+            text: "The app detects knocks, beeps, alarms, and sirens. Events use cooldowns so they don’t spam."
+        ),
+        (
+            title: "EQ Meter",
+            text: "Five bars show low to high frequencies in real time. Higher bars mean stronger sound energy."
+        ),
+        (
+            title: "Noisy Mode",
+            text: "Enable Noisy Mode in the Mic detail page to raise thresholds in loud environments."
+        ),
+        (
+            title: "Privacy",
+            text: "Audio processing stays on-device. Transcription is on-device when available."
+        )
+    ]
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Mic Overview").font(.title.bold())
-                Text("• Speak clearly and at a moderate pace.\n• Reduce background noise when possible.\n• Use headphones with a mic for clearer input.")
-                Text("Tips").font(.headline)
-                Text("• Pause briefly between sentences.\n• If the app isn't responding, check microphone permissions in Settings.")
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
             }
             .padding()
         }
@@ -3186,17 +3424,137 @@ struct MicTutorialPage: View {
 }
 
 struct BrowserTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "URL Bar + Saved Sites",
+            text: "Paste or type a URL, then tap Go. Use the bookmark button to save sites and tap them later to reload."
+        ),
+        (
+            title: "Reader Controls",
+            text: "Turn Reader Controls on for accessible viewing. Turn them off to view the normal webpage."
+        ),
+        (
+            title: "Text Size & Line Spacing",
+            text: "Use sliders to improve readability for longer passages."
+        ),
+        (
+            title: "High Contrast & Link Highlight",
+            text: "High contrast inverts colors for readability. Highlight links underlines them and makes them easier to tap."
+        ),
+        (
+            title: "Simplify + Focus Mode",
+            text: "Simplify hides extra layout when possible. Higher intensity removes more content. Focus Mode shows one paragraph at a time."
+        ),
+        (
+            title: "Read Aloud",
+            text: "Play, pause, or stop TTS. You can adjust the speech rate and see the current text being read."
+        ),
+        (
+            title: "Auto Scroll",
+            text: "Enable auto-scroll and adjust speed for hands-free reading."
+        )
+    ]
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Browser Overview").font(.title.bold())
-                Text("• Use the integrated browser to access content within EchoSight.\n• Navigate with the standard back/forward buttons.\n• Use reader mode if available for simplified pages.")
-                Text("Tips").font(.headline)
-                Text("• Favor accessible websites with semantic markup.\n• Increase text size using system accessibility settings for better readability.")
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
             }
             .padding()
         }
         .navigationTitle("Browser Tutorial")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct SettingsTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "Enable or Disable Features",
+            text: "Turn tiles on or off to keep your home screen focused on what you use most."
+        ),
+        (
+            title: "Theme Color",
+            text: "Choose a theme color to change button highlights, sliders, and accent colors."
+        ),
+        (
+            title: "Speech Settings",
+            text: "Pick a voice and adjust the speech rate. Use Test Voice to preview changes."
+        ),
+        (
+            title: "Open Tile on Start-up",
+            text: "Select a tile to open automatically when EchoSight launches."
+        )
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Settings Tutorial")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AccessibilityTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "Simplified UI",
+            text: "Enlarges tile titles and reduces extra details to make navigation faster."
+        ),
+        (
+            title: "Apply to Red Tiles",
+            text: "Optional setting that simplifies red tiles (Settings, Accessibility, Tutorial, About)."
+        ),
+        (
+            title: "EchoSense Device",
+            text: "Placeholder for connecting a future Bluetooth sensory device."
+        )
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Accessibility Tutorial")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AboutTutorialPage: View {
+    private let tips: [(title: String, text: String)] = [
+        (
+            title: "App Info",
+            text: "See the EchoSight version number and basic app information."
+        ),
+        (
+            title: "Support",
+            text: "Use the About page as a quick reference for app details when troubleshooting."
+        )
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                ForEach(0..<tips.count, id: \.self) { i in
+                    InfoTile(title: tips[i].title, text: tips[i].text)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("About Tutorial")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -3763,7 +4121,7 @@ private struct PhraseSection: View {
                             )
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressFeedbackButtonStyle())
             }
         }
     }

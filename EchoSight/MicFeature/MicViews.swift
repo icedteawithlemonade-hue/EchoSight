@@ -54,7 +54,7 @@ struct MicTileView: View {
                     MicEQBarsView(bands: viewModel.eqBands, barColor: appThemeColor)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressFeedbackButtonStyle())
 
             if let error = viewModel.errorBanner {
                 Text(error)
@@ -65,7 +65,7 @@ struct MicTileView: View {
             Button(viewModel.isListening ? "Stop" : "Start") {
                 viewModel.toggleListening()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(PressableButtonStyle(prominent: true))
             .tint(appThemeColor)
         }
         .padding(16)
@@ -97,7 +97,7 @@ struct MicDetailView: View {
                     Button(viewModel.isListening ? "Stop" : "Start") {
                         viewModel.toggleListening()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PressableButtonStyle(prominent: true))
                     .tint(appThemeColor)
                 }
 

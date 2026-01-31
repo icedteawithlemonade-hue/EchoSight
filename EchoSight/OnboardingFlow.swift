@@ -85,18 +85,18 @@ struct TutorialView: View {
             HStack {
                 if page > 0 {
                     Button("Back") { page = max(0, page - 1) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(PressableButtonStyle(prominent: false))
                 }
                 Spacer()
                 if page < 2 {
                     Button("Next") { page = min(2, page + 1) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PressableButtonStyle(prominent: true))
                 } else {
                     Button("Get Started") {
                         UserDefaults.standard.set(true, forKey: "hasSeenTutorial")
                         flow.phase = .main
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PressableButtonStyle(prominent: true))
                 }
             }
             .padding([.horizontal, .bottom])

@@ -424,15 +424,24 @@ final class ObjectDetectionViewModel: ObservableObject {
     private var lastProcess = Date.distantPast
     private let tracker = DiagnosticsTracker()
     private var request: VNCoreMLRequest?
+    private var sceneRequest: VNClassifyImageRequest?
     private var modelInfo: VisionCoreMLPipeline.ModelInfo?
-    private let confidenceThreshold = 0.35
+    private let confidenceThreshold = 0.30
     private let requiredStableFrames = 2
+    private let requiredMissedFrames = 4
+    private let sceneClassificationInterval: TimeInterval = 1.1
+    private let detectionStaleInterval: TimeInterval = 1.3
+    private let sceneConfidenceThreshold = 0.18
     private var pendingDetectionKey = ""
     private var stableDetectionFrames = 0
     private var lastPublishedDetectionKey = ""
+    private var missedDetectionFrames = 0
+    private var lastSceneProcess = Date.distantPast
+    private var lastReliableDetectionAt = Date.distantPast
 
     init() {
         loadModel()
+        loadSceneFallback()
     }
 
     private func loadModel() {
@@ -455,10 +464,18 @@ final class ObjectDetectionViewModel: ObservableObject {
         }
     }
 
+    private func loadSceneFallback() {
+        let request = VNClassifyImageRequest { [weak self] request, _ in
+            self?.handleSceneResults(request: request)
+        }
+        self.sceneRequest = request
+    }
+
     func process(sampleBuffer: CMSampleBuffer) {
         guard shouldProcess() else { return }
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        guard let request else { return }
+        let requests = requestsForCurrentFrame()
+        guard !requests.isEmpty else { return }
         isProcessing = true
         let start = CACurrentMediaTime()
 
@@ -466,7 +483,7 @@ final class ObjectDetectionViewModel: ObservableObject {
             defer { self?.isProcessing = false }
             guard let self else { return }
             let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
-            try? handler.perform([request])
+            try? handler.perform(requests)
             let elapsed = (CACurrentMediaTime() - start) * 1000
             if self.diagnosticsEnabled {
                 DispatchQueue.main.async {
@@ -475,6 +492,21 @@ final class ObjectDetectionViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func requestsForCurrentFrame() -> [VNRequest] {
+        var requests: [VNRequest] = []
+        if let request {
+            requests.append(request)
+        }
+        let now = Date()
+        if let sceneRequest,
+           now.timeIntervalSince(lastSceneProcess) >= sceneClassificationInterval,
+           now.timeIntervalSince(lastReliableDetectionAt) >= detectionStaleInterval {
+            lastSceneProcess = now
+            requests.append(sceneRequest)
+        }
+        return requests
     }
 
     private func handleResults(request: VNRequest) {
@@ -495,6 +527,7 @@ final class ObjectDetectionViewModel: ObservableObject {
         .sorted { $0.confidence > $1.confidence }
 
         if let best = recognizedObjects.first {
+            missedDetectionFrames = 0
             publishStableDetection(best)
             updateTopDetections(
                 recognizedObjects.prefix(4).map { formattedDetection($0) }
@@ -504,6 +537,7 @@ final class ObjectDetectionViewModel: ObservableObject {
 
         let nmsDetections = decodeNMSDetections(from: featureResults)
         if let best = nmsDetections.first {
+            missedDetectionFrames = 0
             publishStableDetection(best)
             updateTopDetections(nmsDetections.prefix(4).map { formattedDetection($0) })
             return
@@ -512,6 +546,7 @@ final class ObjectDetectionViewModel: ObservableObject {
         if let feature = featureResults.first {
             let detections = YOLOPostProcessor.decode(observation: feature, confidenceThreshold: confidenceThreshold)
             if let best = detections.first {
+                missedDetectionFrames = 0
                 publishStableDetection(best)
                 updateTopDetections(
                     detections.prefix(4).map { formattedDetection($0) }
@@ -522,14 +557,35 @@ final class ObjectDetectionViewModel: ObservableObject {
 
         if let bestClass = classResults.first, Double(bestClass.confidence) >= confidenceThreshold {
             let label = bestClass.identifier.replacingOccurrences(of: "_", with: " ")
-            publishStableDetection(DetectedObject(label: label, confidence: Double(bestClass.confidence), rect: CGRect(x: 0.35, y: 0.35, width: 0.30, height: 0.30)))
+            missedDetectionFrames = 0
+            publishStableDetection(
+                DetectedObject(label: label, confidence: Double(bestClass.confidence), rect: CGRect(x: 0.35, y: 0.35, width: 0.30, height: 0.30))
+            )
             updateTopDetections(classResults.prefix(4).map { "\($0.identifier) \(Int($0.confidence * 100))%" })
             return
         }
 
-        resetStableDetection()
-        setStatus("No clear objects detected")
-        updateTopDetections([])
+        handleMissedDetection()
+    }
+
+    private func handleSceneResults(request: VNRequest) {
+        let results = ((request.results as? [VNClassificationObservation]) ?? [])
+            .filter { Double($0.confidence) >= sceneConfidenceThreshold }
+            .filter { !sceneLabel(from: $0.identifier).isEmpty }
+            .sorted { $0.confidence > $1.confidence }
+
+        guard Date().timeIntervalSince(lastReliableDetectionAt) >= detectionStaleInterval,
+              let best = results.first else {
+            return
+        }
+
+        let label = sceneLabel(from: best.identifier)
+        missedDetectionFrames = 0
+        publishStableDetection(
+            DetectedObject(label: label, confidence: Double(best.confidence), rect: CGRect(x: 0.35, y: 0.35, width: 0.30, height: 0.30)),
+            immediateConfidence: 0.45
+        )
+        updateTopDetections(results.prefix(4).map { "\(sceneLabel(from: $0.identifier)) \(Int($0.confidence * 100))%" })
     }
 
     private func decodeNMSDetections(from features: [VNCoreMLFeatureValueObservation]) -> [DetectedObject] {
@@ -544,7 +600,7 @@ final class ObjectDetectionViewModel: ObservableObject {
         )
     }
 
-    private func publishStableDetection(_ detection: DetectedObject) {
+    private func publishStableDetection(_ detection: DetectedObject, immediateConfidence: Double = 0.72) {
         let label = detection.label.replacingOccurrences(of: "_", with: " ")
         let position = positionDescription(for: detection.rect)
         let key = "\(label.lowercased())|\(position)"
@@ -555,16 +611,33 @@ final class ObjectDetectionViewModel: ObservableObject {
             stableDetectionFrames = 1
         }
 
-        guard stableDetectionFrames >= requiredStableFrames || detection.confidence >= 0.78 else { return }
+        guard stableDetectionFrames >= requiredStableFrames || detection.confidence >= immediateConfidence else { return }
         guard key != lastPublishedDetectionKey else { return }
         lastPublishedDetectionKey = key
+        lastReliableDetectionAt = Date()
         setStatus("\(label.capitalized) \(position)")
+    }
+
+    private func handleMissedDetection() {
+        missedDetectionFrames += 1
+        guard missedDetectionFrames >= requiredMissedFrames else { return }
+        resetStableDetection()
+        setStatus("No clear objects detected")
+        updateTopDetections([])
     }
 
     private func resetStableDetection() {
         pendingDetectionKey = ""
         stableDetectionFrames = 0
         lastPublishedDetectionKey = ""
+    }
+
+    private func sceneLabel(from identifier: String) -> String {
+        let firstLabel = identifier
+            .components(separatedBy: ",")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? identifier
+        return firstLabel.replacingOccurrences(of: "_", with: " ")
     }
 
     private func formattedDetection(_ detection: DetectedObject) -> String {

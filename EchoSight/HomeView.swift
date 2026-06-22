@@ -21,7 +21,12 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Assist Tools")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+
                     if cameraEnabled {
                         TileLink(title: "Camera", subtitle: "Recognize with camera", systemImage: "camera.viewfinder", destination: AnyView(CameraPage()))
                     }
@@ -37,6 +42,15 @@ struct HomeView: View {
                     if morseEnabled {
                         TileLink(title: "Morse Communicator", subtitle: "communicate in morse signals", systemImage: "antenna.radiowaves.left.and.right", destination: AnyView(MorseCommunicatorPage()))
                     }
+                    TileLink(title: "Practice", subtitle: "Daily ASL and Morse lessons", systemImage: "target", destination: AnyView(PracticeHubPage()))
+
+                    Text("More")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.top, 4)
+
+                    TileLink(title: "Activity History", subtitle: "Recent detections, captions, and practice", systemImage: "clock.arrow.circlepath", destination: AnyView(ActivityHistoryPage()))
                     TileLink(title: "Settings", subtitle: "App preferences", systemImage: "gearshape.fill", iconColor: .red, destination: AnyView(SettingsPage()))
                     TileLink(title: "Accessibility", subtitle: "Accessibility options", systemImage: "figure.stand.line.dotted.figure.stand", iconColor: .red, destination: AnyView(AccessibilityPage()))
                     TileLink(title: "Tutorial", subtitle: "View the tutorial again", systemImage: "book.pages.fill", iconColor: .red, destination: AnyView(TutorialHubPage()))
@@ -46,6 +60,7 @@ struct HomeView: View {
                 .padding(.top, 8)
             }
             .navigationTitle("EchoSight")
+            .background(EchoSightBackground())
             .background(
                 NavigationLink(destination: startupDestination, isActive: $autoOpenTile) {
                     EmptyView()
@@ -185,6 +200,96 @@ extension EnvironmentValues {
     }
 }
 
+private struct EchoSightBackground: View {
+    @Environment(\.appThemeColor) private var appThemeColor
+
+    var body: some View {
+        ZStack {
+            Color(.systemGroupedBackground)
+            LinearGradient(
+                colors: [
+                    appThemeColor.opacity(0.10),
+                    Color(.systemGroupedBackground).opacity(0.0),
+                    Color(.systemGroupedBackground)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct DashboardStatusCard: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(tint)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(tint.opacity(0.12)))
+            Text(title)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct OfflinePrivacyCard: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Offline-first privacy")
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                Text("Camera detection, OCR, Morse, ASL learning, and mic analysis are designed to run on device. No images are uploaded by these tools.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct CardPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
+            .brightness(configuration.isPressed ? -0.025 : 0)
+            .animation(.spring(response: 0.24, dampingFraction: 0.78), value: configuration.isPressed)
+    }
+}
+
+private struct AppearOnLoad: ViewModifier {
+    @State private var visible = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(visible ? 1 : 0)
+            .offset(y: visible ? 0 : 10)
+            .animation(.spring(response: 0.42, dampingFraction: 0.86), value: visible)
+            .onAppear {
+                visible = true
+            }
+    }
+}
+
 private struct TileLink: View {
     @AppStorage("accessibility.simplifiedUI") private var simplifiedUI: Bool = false
     @AppStorage("accessibility.simplifiedUI.includeRed") private var simplifyRedTiles: Bool = false
@@ -229,6 +334,7 @@ private struct TileLink: View {
                             .fill(appThemeColor)
                             .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
                     )
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 } else if simplifyRedTiles {
                     // Simplified UI for red tiles when allowed: no icon/subtitle, large title with red background
                     HStack {
@@ -248,6 +354,7 @@ private struct TileLink: View {
                             .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
                     )
                     .foregroundStyle(.white)
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 } else {
                     // Simplified is on but red tiles not simplified: show normal layout
                     HStack(spacing: 16) {
@@ -257,18 +364,20 @@ private struct TileLink: View {
                                 .font(.system(size: 40, weight: .semibold))
                                 .frame(width: 56, height: 56)
                                 .foregroundStyle(iconColor)
+                                .background(Circle().fill(iconColor.opacity(0.12)))
                         } else {
                             Image(systemName: systemImage)
                                 .symbolRenderingMode(.hierarchical)
                                 .font(.system(size: 40, weight: .semibold))
                                 .frame(width: 56, height: 56)
                                 .foregroundStyle(.tint)
+                                .background(Circle().fill(appThemeColor.opacity(0.12)))
                         }
                         VStack(alignment: .leading, spacing: 4) {
                             Text(title)
-                                .font(.title2.weight(.semibold))
+                                .font(.system(.title2, design: .rounded).weight(.bold))
                             Text(subtitle)
-                                .font(.subheadline)
+                                .font(.system(.subheadline, design: .rounded).weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -285,6 +394,7 @@ private struct TileLink: View {
                                     .stroke(.secondary.opacity(0.15), lineWidth: 2)
                             )
                     )
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
             } else {
                 // Normal layout (icons + subtitle)
@@ -295,18 +405,20 @@ private struct TileLink: View {
                             .font(.system(size: 40, weight: .semibold))
                             .frame(width: 56, height: 56)
                             .foregroundStyle(iconColor)
+                            .background(Circle().fill(iconColor.opacity(0.12)))
                     } else {
                         Image(systemName: systemImage)
                             .symbolRenderingMode(.hierarchical)
                             .font(.system(size: 40, weight: .semibold))
                             .frame(width: 56, height: 56)
                             .foregroundStyle(.tint)
+                            .background(Circle().fill(appThemeColor.opacity(0.12)))
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title)
-                            .font(.title2.weight(.semibold))
+                            .font(.system(.title2, design: .rounded).weight(.bold))
                         Text(subtitle)
-                            .font(.subheadline)
+                            .font(.system(.subheadline, design: .rounded).weight(.medium))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -323,9 +435,11 @@ private struct TileLink: View {
                                 .stroke(.secondary.opacity(0.15), lineWidth: 2)
                         )
                 )
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CardPressButtonStyle())
+        .modifier(AppearOnLoad())
     }
 }
 
@@ -368,6 +482,7 @@ private struct ActionTile: View {
                         .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
                 )
                 .foregroundStyle(.white)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
                 HStack(spacing: 16) {
                     if let iconColor {
@@ -376,18 +491,20 @@ private struct ActionTile: View {
                             .font(.system(size: 40, weight: .semibold))
                             .frame(width: 56, height: 56)
                             .foregroundStyle(iconColor)
+                            .background(Circle().fill(iconColor.opacity(0.12)))
                     } else {
                         Image(systemName: systemImage)
                             .symbolRenderingMode(.hierarchical)
                             .font(.system(size: 40, weight: .semibold))
                             .frame(width: 56, height: 56)
                             .foregroundStyle(.tint)
+                            .background(Circle().fill(appThemeColor.opacity(0.12)))
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title)
-                            .font(.title2.weight(.semibold))
+                            .font(.system(.title2, design: .rounded).weight(.bold))
                         Text(subtitle)
-                            .font(.subheadline)
+                            .font(.system(.subheadline, design: .rounded).weight(.medium))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -404,9 +521,182 @@ private struct ActionTile: View {
                                 .stroke(.secondary.opacity(0.15), lineWidth: 2)
                         )
                 )
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CardPressButtonStyle())
+        .modifier(AppearOnLoad())
+    }
+}
+
+struct ActivityHistoryPage: View {
+    @StateObject private var history = ActivityHistoryStore.shared
+
+    var body: some View {
+        List {
+            Section {
+                if history.items.isEmpty {
+                    ContentUnavailableView(
+                        "No activity yet",
+                        systemImage: "clock",
+                        description: Text("Detections, captions, read text, Morse, ASL, and practice sessions will appear here.")
+                    )
+                } else {
+                    ForEach(history.items) { item in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: item.kind.systemImage)
+                                .font(.headline)
+                                .foregroundStyle(.tint)
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(Color.accentColor.opacity(0.12)))
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(item.title)
+                                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                    Spacer()
+                                    Text(item.date, style: .time)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(item.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } header: {
+                Text("Recent Activity")
+            }
+        }
+        .navigationTitle("Activity History")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !history.items.isEmpty {
+                Button("Clear") {
+                    history.clear()
+                }
+            }
+        }
+    }
+}
+
+struct PracticeHubPage: View {
+    @StateObject private var practice = PracticeStore.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                PracticeSummaryCard(practice: practice)
+                ForEach(PracticeTrack.allCases) { track in
+                    PracticeTrackCard(track: track, progress: practice.progress(for: track)) {
+                        practice.completeDailyLesson(track: track)
+                    }
+                }
+                OfflinePrivacyCard()
+            }
+            .padding()
+        }
+        .navigationTitle("Practice")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(EchoSightBackground())
+    }
+}
+
+private struct PracticeSummaryCard: View {
+    @ObservedObject var practice: PracticeStore
+
+    var body: some View {
+        HStack(spacing: 12) {
+            DashboardStatusCard(title: "Lessons", detail: "\(practice.totalCompletedLessons) complete", systemImage: "checkmark.seal.fill", tint: .green)
+            DashboardStatusCard(title: "Best Streak", detail: "\(practice.bestStreak) days", systemImage: "flame.fill", tint: .orange)
+        }
+    }
+}
+
+private struct PracticeTrackCard: View {
+    let track: PracticeTrack
+    let progress: PracticeProgress
+    let complete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: track.systemImage)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(Color.accentColor.opacity(0.12)))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(track.title) Daily Lesson")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                    Text(nextLesson)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                PracticeMiniMetricCard(value: "\(progress.completedLessons)", label: "lessons", systemImage: "checkmark")
+                PracticeMiniMetricCard(value: "\(progress.streak)", label: "streak", systemImage: "flame.fill")
+                PracticeMiniMetricCard(value: "\(progress.achievements.count)", label: "badges", systemImage: "rosette")
+            }
+
+            Button {
+                complete()
+            } label: {
+                Label("Complete today's lesson", systemImage: "plus.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PressableButtonStyle(prominent: true))
+
+            if !progress.achievements.isEmpty {
+                Text("Achievements: \(progress.achievements.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(.background, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(.secondary.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private var nextLesson: String {
+        switch track {
+        case .asl:
+            return "Practice 5 signs, then review one phrase."
+        case .morse:
+            return "Practice 5 letters, then play one word."
+        }
+    }
+}
+
+private struct PracticeMiniMetricCard: View {
+    let value: String
+    let label: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tint)
+            Text(value)
+                .font(.system(.title2, design: .rounded).weight(.heavy))
+            Text(label)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -455,7 +745,7 @@ struct CameraPage: View {
         }
         .navigationTitle("Camera Accessibility")
         .navigationBarTitleDisplayMode(.inline)
-        .background(Color(.systemBackground))
+        .background(EchoSightBackground())
     }
 }
 
@@ -466,7 +756,18 @@ private struct CameraPreviewCard: View {
 
     var body: some View {
         ZStack {
-            if camera.isAuthorized {
+            if let cameraError = camera.cameraError {
+                VStack(spacing: 8) {
+                    Image(systemName: "camera.slash")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text(cameraError)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+            } else if camera.isAuthorized, camera.hasCameraInput {
                 CameraPreview(session: camera.session)
                     .accessibilityLabel(title)
             } else {
@@ -615,7 +916,6 @@ struct ObjectDetectionPage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Integrate Vision/Core ML object detection model here.
             }
             .padding()
         }
@@ -623,13 +923,22 @@ struct ObjectDetectionPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.process(sampleBuffer: sample)
             }
             camera.start()
         }
+        .onChange(of: showDiagnostics) { enabled in
+            viewModel.diagnosticsEnabled = enabled
+        }
         .onChange(of: viewModel.statusText) { newValue in
+            guard !newValue.localizedCaseInsensitiveContains("looking"),
+                  !newValue.localizedCaseInsensitiveContains("no clear") else {
+                return
+            }
+            ActivityHistoryStore.shared.add(.object, title: "Object Detection", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
             }
@@ -731,6 +1040,7 @@ struct TextReaderPage: View {
             camera.start()
         }
         .onChange(of: viewModel.recognizedText) { newValue in
+            ActivityHistoryStore.shared.add(.readText, title: "Text Reader", detail: newValue)
             if audioFeedback {
                 speech.speak(newValue, rate: speechRate, pitch: speechPitch, volume: speechVolume, debounce: true)
             }
@@ -781,7 +1091,10 @@ struct CurrencyIdentifierPage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Integrate Core ML model for currency classification.
+                Text("Uses the bundled classifier when available; otherwise OCR confirms denomination text and numbers across frames.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
             }
             .padding()
         }
@@ -789,13 +1102,19 @@ struct CurrencyIdentifierPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.update(sampleBuffer: sample)
             }
             camera.start()
         }
+        .onChange(of: showDiagnostics) { enabled in
+            viewModel.diagnosticsEnabled = enabled
+        }
         .onChange(of: viewModel.statusText) { newValue in
+            guard newValue.hasPrefix("Detected: $") else { return }
+            ActivityHistoryStore.shared.add(.object, title: "Currency Identifier", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
             }
@@ -845,13 +1164,18 @@ struct NearbyPeoplePage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.process(sampleBuffer: sample)
             }
             camera.start()
         }
+        .onChange(of: showDiagnostics) { enabled in
+            viewModel.diagnosticsEnabled = enabled
+        }
         .onChange(of: viewModel.statusText) { newValue in
+            ActivityHistoryStore.shared.add(.object, title: "Nearby People", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
             }
@@ -901,13 +1225,18 @@ struct CrosswalkSignalPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.process(sampleBuffer: sample)
             }
             camera.start()
         }
+        .onChange(of: showDiagnostics) { enabled in
+            viewModel.diagnosticsEnabled = enabled
+        }
         .onChange(of: viewModel.statusText) { newValue in
+            ActivityHistoryStore.shared.add(.object, title: "Crosswalk Signal", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
             }
@@ -957,13 +1286,21 @@ struct PathGuidancePage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.process(sampleBuffer: sample)
             }
             camera.start()
         }
+        .onChange(of: showDiagnostics) { enabled in
+            viewModel.diagnosticsEnabled = enabled
+        }
         .onChange(of: viewModel.statusText) { newValue in
+            ActivityHistoryStore.shared.add(.object, title: "Path Guidance", detail: newValue)
+            if newValue.localizedCaseInsensitiveContains("left") || newValue.localizedCaseInsensitiveContains("right") {
+                AssistAlertCenter.shared.alert(.obstacle, message: newValue)
+            }
             if audioFeedback {
                 announcer.announce(newValue)
             }
@@ -1016,6 +1353,12 @@ struct MorseCommunicatorPage: View {
                     subtitle: "Type text to play vibrations",
                     systemImage: "waveform.path.ecg",
                     destination: AnyView(MorseOutputPage())
+                )
+                TileLink(
+                    title: "Morse Practice",
+                    subtitle: "Daily streaks and lessons",
+                    systemImage: "target",
+                    destination: AnyView(PracticeHubPage())
                 )
                 TileLink(
                     title: "Morse Letters",
@@ -1252,8 +1595,10 @@ struct MorseInputPage: View {
         rawStream.append(currentSymbols)
         if let character = MorseCodeMap.shared.character(for: currentSymbols) {
             outputText.append(character)
+            ActivityHistoryStore.shared.add(.morse, title: "Morse Input", detail: "Decoded \(currentSymbols) as \(character)")
         } else {
             outputText.append("?")
+            ActivityHistoryStore.shared.add(.morse, title: "Morse Input", detail: "Unknown symbol \(currentSymbols)")
         }
         currentSymbols = ""
     }
@@ -1484,6 +1829,8 @@ struct MorseOutputPage: View {
         playbackStatus = .playing
         playbackToken += 1
         let token = playbackToken
+        ActivityHistoryStore.shared.add(.morse, title: "Morse Output", detail: "Playing \(words.joined(separator: " "))")
+        AssistAlertCenter.shared.alert(.morse, message: "Morse playback started")
 
         playbackTask = Task {
             await haptics.startEngineIfNeeded()
@@ -2689,8 +3036,10 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
         autoScrollTimer = nil
         guard enabled else { return }
         let clamped = max(0.2, min(speed, 6.0))
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
-            self?.webView?.evaluateJavaScript("window.scrollBy(0, \(clamped));", completionHandler: nil)
+        let interval = 0.08
+        let step = clamped * 2
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.webView?.evaluateJavaScript("window.scrollBy(0, \(step));", completionHandler: nil)
         }
     }
 
@@ -3001,6 +3350,14 @@ struct SettingsPage: View {
                     SpeechAnnouncer.shared.testVoice()
                 }
                 Text("Tip: Download enhanced voices in Settings → Accessibility → Spoken Content → Voices.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Privacy & Device Alerts") {
+                Label("Offline-first camera, OCR, mic analysis, ASL, and Morse tools", systemImage: "lock.shield.fill")
+                Label("iPhone haptics are active for Morse, practice, obstacle, and sound alerts", systemImage: "iphone.radiowaves.left.and.right")
+                Label("Apple Watch relay is ready when a companion watch app is installed", systemImage: "applewatch")
+                Text("EchoSight does not upload camera frames for its critical assist tools.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -3476,6 +3833,7 @@ struct ASLAlphabetPage: View {
                 TileLink(title: "ASL Alphabet", subtitle: "Browse letters A–Z", systemImage: "hand.raised.fill", destination: AnyView(ASLAlphabetLearnView()))
                 TileLink(title: "ASL Numbers", subtitle: "Numbers 1–20", systemImage: "123.rectangle", destination: AnyView(ASLNumbersLearnView()))
                 TileLink(title: "ASL Phrases", subtitle: "Practice common phrases", systemImage: "text.bubble", destination: AnyView(ASLPhrasesPage()))
+                TileLink(title: "Daily Practice", subtitle: "Streaks, quizzes, and progress", systemImage: "target", destination: AnyView(PracticeHubPage()))
             }
             .padding()
         }

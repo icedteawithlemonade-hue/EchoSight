@@ -3,6 +3,7 @@ import SwiftUI
 struct MicTileView: View {
     @ObservedObject var viewModel: MicViewModel
     @Environment(\.appThemeColor) private var appThemeColor
+    @State private var listeningPulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -18,6 +19,14 @@ struct MicTileView: View {
                         Circle()
                             .fill(viewModel.isListening ? Color.green : Color.secondary)
                             .frame(width: 8, height: 8)
+                            .scaleEffect(viewModel.isListening && listeningPulse ? 1.8 : 1.0)
+                            .opacity(viewModel.isListening && listeningPulse ? 0.45 : 1.0)
+                            .animation(
+                                viewModel.isListening
+                                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                    : .easeOut(duration: 0.2),
+                                value: listeningPulse
+                            )
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
@@ -79,6 +88,12 @@ struct MicTileView: View {
                         .stroke(.secondary.opacity(0.12), lineWidth: 1)
                 )
         )
+        .onChange(of: viewModel.isListening) { isListening in
+            listeningPulse = isListening
+        }
+        .onAppear {
+            listeningPulse = viewModel.isListening
+        }
     }
 }
 
@@ -188,9 +203,10 @@ private struct MicEQBarsView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(barColor.opacity(0.85))
                     .frame(width: 16, height: max(6, CGFloat(bands[index]) * 60))
+                    .shadow(color: barColor.opacity(0.18), radius: 5, x: 0, y: 3)
             }
         }
-        .animation(.easeOut(duration: 0.12), value: bands)
+        .animation(.spring(response: 0.22, dampingFraction: 0.78), value: bands)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

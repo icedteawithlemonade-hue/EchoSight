@@ -48,6 +48,49 @@ struct YOLOPostProcessor {
         return nonMaxSuppression(detections, iouThreshold: iouThreshold)
     }
 
+    static func decodeNMS(
+        confidenceObservation: VNCoreMLFeatureValueObservation,
+        coordinatesObservation: VNCoreMLFeatureValueObservation,
+        labels: [String] = cocoLabels,
+        confidenceThreshold: Double = 0.35
+    ) -> [DetectedObject] {
+        guard let confidenceArray = confidenceObservation.featureValue.multiArrayValue,
+              let coordinateArray = coordinatesObservation.featureValue.multiArrayValue,
+              let confidenceMatrix = MultiArrayMatrix(confidenceArray, preferredColumnCount: labels.count),
+              let coordinateMatrix = MultiArrayMatrix(coordinateArray, preferredColumnCount: 4) else {
+            return []
+        }
+
+        let detectionCount = min(confidenceMatrix.rows, coordinateMatrix.rows)
+        let classCount = min(confidenceMatrix.columns, labels.count)
+        var detections: [DetectedObject] = []
+
+        for row in 0..<detectionCount {
+            var bestClass = 0
+            var bestConfidence = 0.0
+            for classIndex in 0..<classCount {
+                let confidence = confidenceMatrix.value(row: row, column: classIndex)
+                if confidence > bestConfidence {
+                    bestConfidence = confidence
+                    bestClass = classIndex
+                }
+            }
+
+            guard bestConfidence >= confidenceThreshold else { continue }
+            let coordinates = (0..<4).map { coordinateMatrix.value(row: row, column: $0) }
+            let label = bestClass < labels.count ? labels[bestClass] : "object"
+            detections.append(
+                DetectedObject(
+                    label: label,
+                    confidence: bestConfidence,
+                    rect: normalizedBoundingBox(from: coordinates)
+                )
+            )
+        }
+
+        return detections.sorted { $0.confidence > $1.confidence }
+    }
+
     private static func nonMaxSuppression(_ detections: [DetectedObject], iouThreshold: Double) -> [DetectedObject] {
         let sorted = detections.sorted { $0.confidence > $1.confidence }
         var selected: [DetectedObject] = []
@@ -73,6 +116,45 @@ struct YOLOPostProcessor {
         let interArea = inter.width * inter.height
         let unionArea = a.width * a.height + b.width * b.height - interArea
         return unionArea > 0 ? Double(interArea / unionArea) : 0
+    }
+
+    private static func normalizedBoundingBox(from coordinates: [Double]) -> CGRect {
+        guard coordinates.count == 4 else { return .zero }
+        var values = coordinates
+        let maxValue = values.map { abs($0) }.max() ?? 1
+        if maxValue > 2 {
+            let scale = max(640, maxValue)
+            values = values.map { $0 / scale }
+        }
+
+        let centerX = values[0]
+        let centerY = values[1]
+        let width = abs(values[2])
+        let height = abs(values[3])
+        return clamp(
+            CGRect(
+                x: centerX - width / 2,
+                y: centerY - height / 2,
+                width: width,
+                height: height
+            )
+        )
+    }
+
+    private static func clamp(_ rect: CGRect) -> CGRect {
+        let minX = min(max(rect.minX, 0), 1)
+        let minY = min(max(rect.minY, 0), 1)
+        let maxX = min(max(rect.maxX, 0), 1)
+        let maxY = min(max(rect.maxY, 0), 1)
+        guard maxX > minX, maxY > minY else {
+            return CGRect(
+                x: min(max(rect.midX, 0), 1),
+                y: min(max(rect.midY, 0), 1),
+                width: 0.01,
+                height: 0.01
+            )
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 }
 
@@ -125,6 +207,67 @@ private struct MultiArrayAccessor {
             }
         }
         return array[idx].doubleValue
+    }
+}
+
+private struct MultiArrayMatrix {
+    let array: MLMultiArray
+    let rows: Int
+    let columns: Int
+    private let rowStride: Int
+    private let columnStride: Int
+    private let baseOffset: Int
+
+    init?(_ array: MLMultiArray, preferredColumnCount: Int) {
+        let shape = array.shape.map { $0.intValue }
+        let strides = array.strides.map { $0.intValue }
+        guard shape.count >= 2, shape.count <= 3 else { return nil }
+
+        if shape.count == 2 {
+            if shape[1] == preferredColumnCount {
+                self.rows = shape[0]
+                self.columns = shape[1]
+                self.rowStride = strides[0]
+                self.columnStride = strides[1]
+                self.baseOffset = 0
+            } else if shape[0] == preferredColumnCount {
+                self.rows = shape[1]
+                self.columns = shape[0]
+                self.rowStride = strides[1]
+                self.columnStride = strides[0]
+                self.baseOffset = 0
+            } else {
+                return nil
+            }
+        } else if shape[2] == preferredColumnCount {
+            self.rows = shape[1]
+            self.columns = shape[2]
+            self.rowStride = strides[1]
+            self.columnStride = strides[2]
+            self.baseOffset = 0
+        } else if shape[1] == preferredColumnCount {
+            self.rows = shape[2]
+            self.columns = shape[1]
+            self.rowStride = strides[2]
+            self.columnStride = strides[1]
+            self.baseOffset = 0
+        } else if shape[0] == preferredColumnCount {
+            self.rows = shape[1]
+            self.columns = shape[0]
+            self.rowStride = strides[1]
+            self.columnStride = strides[0]
+            self.baseOffset = 0
+        } else {
+            return nil
+        }
+
+        guard rows > 0, columns > 0 else { return nil }
+        self.array = array
+    }
+
+    func value(row: Int, column: Int) -> Double {
+        let index = baseOffset + row * rowStride + column * columnStride
+        return array[index].doubleValue
     }
 }
 

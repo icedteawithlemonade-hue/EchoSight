@@ -1,6 +1,24 @@
 import Combine
 import Foundation
 
+private final class UpdateThrottle: @unchecked Sendable {
+    private let interval: TimeInterval
+    private let lock = NSLock()
+    private var lastRun = Date.distantPast
+
+    nonisolated init(interval: TimeInterval) {
+        self.interval = interval
+    }
+
+    func shouldRun(at date: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard date.timeIntervalSince(lastRun) >= interval else { return false }
+        lastRun = date
+        return true
+    }
+}
+
 // README: MicViewModel data flow
 // 1) AudioCaptureService captures mic buffers and RMS on a background queue.
 // 2) Buffers feed EQAnalyzer (FFT) + SoundEventService for local detection.
@@ -26,9 +44,12 @@ final class MicViewModel: ObservableObject {
     nonisolated private let transcriptionService = LiveTranscriptionService()
     nonisolated private let soundEventService = SoundEventService()
     nonisolated private let processingQueue = DispatchQueue(label: "echosight.mic.processing")
+    nonisolated private let eqPublishThrottle = UpdateThrottle(interval: 1.0 / 15.0)
     private var cancellables = Set<AnyCancellable>()
     private let maxEvents = 5
     private let eventWindowSeconds: TimeInterval = 12
+    private var lastLoggedTranscriptLine = ""
+    private var lastTranscriptLogAt = Date.distantPast
 
     init() {
         bindServices()
@@ -94,14 +115,19 @@ final class MicViewModel: ObservableObject {
             .sink { [weak self] sample in
                 let bands = eqAnalyzer.process(buffer: sample.buffer, sampleRate: sample.sampleRate)
                 let event = soundEventService.process(bands: bands, rms: sample.rms, timestamp: sample.timestamp)
+                let shouldPublishBands = self?.eqPublishThrottle.shouldRun(at: sample.timestamp) ?? false
 
                 transcriptionService.appendAudioBuffer(sample.buffer)
 
                 Task { @MainActor in
                     guard let self else { return }
-                    self.eqBands = bands
+                    if shouldPublishBands {
+                        self.eqBands = bands
+                    }
                     if let event {
                         self.appendEvent(event)
+                        ActivityHistoryStore.shared.add(.sound, title: event.type.displayName, detail: "Confidence \(Int(event.confidence * 100))%")
+                        AssistAlertCenter.shared.alert(.sound, message: event.type.displayName)
                     }
                 }
             }
@@ -113,6 +139,9 @@ final class MicViewModel: ObservableObject {
                 guard let self else { return }
                 self.fullTranscript = transcript
                 self.transcriptLines = self.formatLines(from: transcript)
+                if let latestLine = self.transcriptLines.last {
+                    self.logTranscriptIfNeeded(latestLine)
+                }
             }
             .store(in: &cancellables)
 
@@ -175,5 +204,17 @@ final class MicViewModel: ObservableObject {
             lines.append(current)
         }
         return Array(lines.suffix(3))
+    }
+
+    private func logTranscriptIfNeeded(_ line: String) {
+        let cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        let now = Date()
+        guard cleaned != lastLoggedTranscriptLine || now.timeIntervalSince(lastTranscriptLogAt) > 4 else {
+            return
+        }
+        lastLoggedTranscriptLine = cleaned
+        lastTranscriptLogAt = now
+        ActivityHistoryStore.shared.add(.transcript, title: "Live Caption", detail: cleaned)
     }
 }

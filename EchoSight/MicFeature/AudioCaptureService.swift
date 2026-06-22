@@ -20,6 +20,7 @@ final class AudioCaptureService: ObservableObject {
     private let session = AVAudioSession.sharedInstance()
     private let processingQueue = DispatchQueue(label: "echosight.audio.capture")
     private var wasRunningBeforeInterruption = false
+    private var lastRMSPublishAt = Date.distantPast
 
     init() {
         NotificationCenter.default.addObserver(
@@ -134,8 +135,11 @@ final class AudioCaptureService: ObservableObject {
         let sampleRate = Float(copy.format.sampleRate)
         let sample = AudioSample(buffer: copy, rms: rms, sampleRate: sampleRate, timestamp: Date())
         sampleSubject.send(sample)
-        DispatchQueue.main.async {
-            self.rmsLevel = rms
+        if sample.timestamp.timeIntervalSince(lastRMSPublishAt) >= 1.0 / 15.0 {
+            lastRMSPublishAt = sample.timestamp
+            DispatchQueue.main.async {
+                self.rmsLevel = rms
+            }
         }
     }
 

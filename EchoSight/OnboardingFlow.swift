@@ -68,15 +68,16 @@ struct LoadingView: View {
 struct TutorialView: View {
     @EnvironmentObject var flow: AppFlow
     @State private var page: Int = 0
+    @State private var selectedNeeds: Set<OnboardingNeed> = [.vision, .hearing, .learning]
 
     var body: some View {
         VStack {
             TabView(selection: $page) {
                 TutorialPageView(title: "Welcome to EchoSight", subtitle: "See and hear your world with clarity.", imageName: "EchoSightLogo")
                     .tag(0)
-                TutorialPageView(title: "Use the Camera", subtitle: "Point your camera to recognize objects.", systemImage: "camera.viewfinder")
+                AdaptiveNeedsPage(selectedNeeds: $selectedNeeds)
                     .tag(1)
-                TutorialPageView(title: "Hear It Aloud", subtitle: "Let EchoSight read text and descriptions.", systemImage: "speaker.wave.2.fill")
+                TutorialPageView(title: "Private by Design", subtitle: "EchoSight prioritizes on-device camera, text, audio, Morse, and learning tools.", systemImage: "lock.shield.fill")
                     .tag(2)
             }
             .tabViewStyle(.page)
@@ -93,7 +94,7 @@ struct TutorialView: View {
                         .buttonStyle(.borderedProminent)
                 } else {
                     Button("Get Started") {
-                        UserDefaults.standard.set(true, forKey: "hasSeenTutorial")
+                        applyAdaptiveSetup()
                         flow.phase = .main
                     }
                     .buttonStyle(.borderedProminent)
@@ -101,6 +102,147 @@ struct TutorialView: View {
             }
             .padding([.horizontal, .bottom])
         }
+    }
+
+    private func applyAdaptiveSetup() {
+        let defaults = UserDefaults.standard
+        let needs = selectedNeeds.isEmpty ? Set(OnboardingNeed.allCases) : selectedNeeds
+
+        defaults.set(true, forKey: "feature.browser.enabled")
+        defaults.set(needs.contains(.vision), forKey: "feature.camera.enabled")
+        defaults.set(needs.contains(.hearing), forKey: "feature.mic.enabled")
+        defaults.set(needs.contains(.learning), forKey: "feature.asl.enabled")
+        defaults.set(needs.contains(.communication), forKey: "feature.morse.enabled")
+        defaults.set(needs.contains(.simple), forKey: "accessibility.simplifiedUI")
+
+        let startup: StartupTile
+        if needs.contains(.vision) {
+            startup = .camera
+        } else if needs.contains(.hearing) {
+            startup = .mic
+        } else if needs.contains(.communication) {
+            startup = .morse
+        } else if needs.contains(.learning) {
+            startup = .asl
+        } else {
+            startup = .none
+        }
+
+        defaults.set(startup != .none, forKey: "startup.open.enabled")
+        defaults.set(startup.rawValue, forKey: "startup.open.tile")
+        defaults.set(true, forKey: "hasSeenTutorial")
+
+        ActivityHistoryStore.shared.add(.system, title: "Adaptive setup", detail: "Configured EchoSight for \(needs.map(\.title).joined(separator: ", ")).")
+    }
+}
+
+enum OnboardingNeed: String, CaseIterable, Identifiable {
+    case vision
+    case hearing
+    case learning
+    case communication
+    case simple
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .vision: return "Visual assistance"
+        case .hearing: return "Audio awareness"
+        case .learning: return "ASL learning"
+        case .communication: return "Morse tools"
+        case .simple: return "Simpler UI"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .vision: return "Camera, OCR, objects"
+        case .hearing: return "Mic, captions, sound events"
+        case .learning: return "Lessons, signs, phrases"
+        case .communication: return "Input, output, haptics"
+        case .simple: return "Bigger focused controls"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .vision: return "camera.viewfinder"
+        case .hearing: return "ear.and.waveform"
+        case .learning: return "hand.raised.fill"
+        case .communication: return "antenna.radiowaves.left.and.right"
+        case .simple: return "rectangle.grid.1x2"
+        }
+    }
+}
+
+struct AdaptiveNeedsPage: View {
+    @Binding var selectedNeeds: Set<OnboardingNeed>
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What should EchoSight focus on?")
+                        .font(.largeTitle.bold())
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Pick what matters. You can change this later in Settings.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(OnboardingNeed.allCases) { need in
+                    Button {
+                        if selectedNeeds.contains(need) {
+                            selectedNeeds.remove(need)
+                        } else {
+                            selectedNeeds.insert(need)
+                        }
+                    } label: {
+                        NeedSelectionRow(need: need, isSelected: selectedNeeds.contains(need))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+private struct NeedSelectionRow: View {
+    let need: OnboardingNeed
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: need.systemImage)
+                .font(.title2.weight(.bold))
+                .frame(width: 44, height: 44)
+                .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+                .background(
+                    Circle()
+                        .fill(isSelected ? Color.accentColor : Color.accentColor.opacity(0.12))
+                )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(need.title)
+                    .font(.headline)
+                Text(need.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.systemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.12), lineWidth: 1)
+                )
+        )
     }
 }
 

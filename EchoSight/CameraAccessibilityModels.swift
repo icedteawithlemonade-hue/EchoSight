@@ -417,6 +417,7 @@ final class VisionCoreMLPipeline {
 final class ObjectDetectionViewModel: ObservableObject {
     @Published var statusText: String = "Loading object detector..."
     @Published var diagnostics = DiagnosticsInfo()
+    var diagnosticsEnabled = false
 
     private let queue = DispatchQueue(label: "echosight.object.detect", qos: .userInitiated)
     private var isProcessing = false
@@ -424,6 +425,11 @@ final class ObjectDetectionViewModel: ObservableObject {
     private let tracker = DiagnosticsTracker()
     private var request: VNCoreMLRequest?
     private var modelInfo: VisionCoreMLPipeline.ModelInfo?
+    private let confidenceThreshold = 0.35
+    private let requiredStableFrames = 2
+    private var pendingDetectionKey = ""
+    private var stableDetectionFrames = 0
+    private var lastPublishedDetectionKey = ""
 
     init() {
         loadModel()
@@ -435,7 +441,7 @@ final class ObjectDetectionViewModel: ObservableObject {
             let request = VNCoreMLRequest(model: modelInfo.vnModel) { [weak self] request, _ in
                 self?.handleResults(request: request)
             }
-            request.imageCropAndScaleOption = .scaleFill
+            request.imageCropAndScaleOption = .scaleFit
             self.request = request
             diagnostics.computeUnits = VisionCoreMLPipeline.computeUnitsDescription(modelInfo.computeUnits)
             diagnostics.usesNeuralEngine = modelInfo.usesNeuralEngine
@@ -462,9 +468,11 @@ final class ObjectDetectionViewModel: ObservableObject {
             let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
             try? handler.perform([request])
             let elapsed = (CACurrentMediaTime() - start) * 1000
-            DispatchQueue.main.async {
-                self.diagnostics.inferenceMs = elapsed
-                self.diagnostics.fps = self.tracker.updateFPS()
+            if self.diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    self.diagnostics.inferenceMs = elapsed
+                    self.diagnostics.fps = self.tracker.updateFPS()
+                }
             }
         }
     }
@@ -474,48 +482,102 @@ final class ObjectDetectionViewModel: ObservableObject {
         let classResults = request.results as? [VNClassificationObservation] ?? []
         let featureResults = request.results?.compactMap { $0 as? VNCoreMLFeatureValueObservation } ?? []
 
-        if let best = objectResults.first {
-            let label = best.labels.first?.identifier.replacingOccurrences(of: "_", with: " ") ?? "Object"
-            let position = positionDescription(for: best.boundingBox)
-            setStatus("\(label.capitalized) \(position)")
+        let recognizedObjects = objectResults.compactMap { observation -> DetectedObject? in
+            guard let label = observation.labels.first, Double(label.confidence) >= confidenceThreshold else {
+                return nil
+            }
+            return DetectedObject(
+                label: label.identifier,
+                confidence: Double(label.confidence),
+                rect: observation.boundingBox
+            )
+        }
+        .sorted { $0.confidence > $1.confidence }
+
+        if let best = recognizedObjects.first {
+            publishStableDetection(best)
             updateTopDetections(
-                objectResults.map { obs in
-                    let name = obs.labels.first?.identifier ?? "Object"
-                    let conf = obs.labels.first?.confidence ?? 0
-                    return "\(name) \(Int(conf * 100))%"
-                }
+                recognizedObjects.prefix(4).map { formattedDetection($0) }
             )
             return
         }
 
+        let nmsDetections = decodeNMSDetections(from: featureResults)
+        if let best = nmsDetections.first {
+            publishStableDetection(best)
+            updateTopDetections(nmsDetections.prefix(4).map { formattedDetection($0) })
+            return
+        }
+
         if let feature = featureResults.first {
-            let detections = YOLOPostProcessor.decode(observation: feature)
+            let detections = YOLOPostProcessor.decode(observation: feature, confidenceThreshold: confidenceThreshold)
             if let best = detections.first {
-                let position = positionDescription(for: best.rect)
-                setStatus("\(best.label.capitalized) \(position)")
+                publishStableDetection(best)
                 updateTopDetections(
-                    detections.prefix(3).map { det in
-                        "\(det.label) \(Int(det.confidence * 100))%"
-                    }
+                    detections.prefix(4).map { formattedDetection($0) }
                 )
                 return
             }
         }
 
-        if let bestClass = classResults.first {
+        if let bestClass = classResults.first, Double(bestClass.confidence) >= confidenceThreshold {
             let label = bestClass.identifier.replacingOccurrences(of: "_", with: " ")
-            setStatus("\(label.capitalized) ahead")
-            updateTopDetections(classResults.prefix(3).map { "\($0.identifier) \(Int($0.confidence * 100))%" })
+            publishStableDetection(DetectedObject(label: label, confidence: Double(bestClass.confidence), rect: CGRect(x: 0.35, y: 0.35, width: 0.30, height: 0.30)))
+            updateTopDetections(classResults.prefix(4).map { "\($0.identifier) \(Int($0.confidence * 100))%" })
             return
         }
 
-        setStatus("No objects detected")
+        resetStableDetection()
+        setStatus("No clear objects detected")
         updateTopDetections([])
     }
 
+    private func decodeNMSDetections(from features: [VNCoreMLFeatureValueObservation]) -> [DetectedObject] {
+        guard let confidence = features.first(where: { $0.featureName == "confidence" }),
+              let coordinates = features.first(where: { $0.featureName == "coordinates" }) else {
+            return []
+        }
+        return YOLOPostProcessor.decodeNMS(
+            confidenceObservation: confidence,
+            coordinatesObservation: coordinates,
+            confidenceThreshold: confidenceThreshold
+        )
+    }
+
+    private func publishStableDetection(_ detection: DetectedObject) {
+        let label = detection.label.replacingOccurrences(of: "_", with: " ")
+        let position = positionDescription(for: detection.rect)
+        let key = "\(label.lowercased())|\(position)"
+        if key == pendingDetectionKey {
+            stableDetectionFrames += 1
+        } else {
+            pendingDetectionKey = key
+            stableDetectionFrames = 1
+        }
+
+        guard stableDetectionFrames >= requiredStableFrames || detection.confidence >= 0.78 else { return }
+        guard key != lastPublishedDetectionKey else { return }
+        lastPublishedDetectionKey = key
+        setStatus("\(label.capitalized) \(position)")
+    }
+
+    private func resetStableDetection() {
+        pendingDetectionKey = ""
+        stableDetectionFrames = 0
+        lastPublishedDetectionKey = ""
+    }
+
+    private func formattedDetection(_ detection: DetectedObject) -> String {
+        let label = detection.label.replacingOccurrences(of: "_", with: " ")
+        return "\(label) \(Int(detection.confidence * 100))%"
+    }
+
     private func updateTopDetections(_ detections: [String]) {
+        guard diagnosticsEnabled else { return }
         DispatchQueue.main.async {
-            self.diagnostics.topDetections = detections
+            if self.diagnostics.topDetections != detections {
+                self.diagnostics.topDetections = detections
+            }
         }
     }
 
@@ -528,14 +590,16 @@ final class ObjectDetectionViewModel: ObservableObject {
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 
     private func shouldProcess() -> Bool {
         guard !isProcessing else { return false }
         let now = Date()
-        guard now.timeIntervalSince(lastProcess) > 0.2 else { return false }
+        guard now.timeIntervalSince(lastProcess) > 0.35 else { return false }
         lastProcess = now
         return true
     }
@@ -577,14 +641,36 @@ final class TextReaderViewModel: ObservableObject {
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 }
 
 final class CurrencyIdentifierViewModel: ObservableObject {
-    @Published var statusText: String = "Detected: —"
+    @Published var statusText: String = "Point camera at a bill"
     @Published var diagnostics = DiagnosticsInfo()
+    var diagnosticsEnabled = false
+
+    private struct TextCandidate {
+        let text: String
+        let confidence: Double
+    }
+
+    private struct DenominationPattern {
+        let label: String
+        let numericTokens: [String]
+        let phrases: [String]
+        let wordTokens: [String]
+    }
+
+    private struct CurrencyEvidence {
+        let label: String
+        let confidence: Double
+        let score: Double
+        let clues: [String]
+    }
 
     private let queue = DispatchQueue(label: "echosight.currency.identify", qos: .userInitiated)
     private var latestBuffer: CVPixelBuffer?
@@ -594,9 +680,20 @@ final class CurrencyIdentifierViewModel: ObservableObject {
     private var request: VNCoreMLRequest?
     private var modelInfo: VisionCoreMLPipeline.ModelInfo?
     private var lastPrediction: String = ""
-    private var lastAnnounced: String = ""
+    private var lastPublished: String = ""
     private var stableFrames: Int = 0
-    private let requiredStableFrames: Int = 3
+    private let requiredStableFrames: Int = 2
+    private let minimumModelConfidence = 0.65
+    private let minimumOCRConfidence = 0.45
+    private let denominationPatterns: [DenominationPattern] = [
+        DenominationPattern(label: "$100", numericTokens: ["100"], phrases: ["ONE HUNDRED"], wordTokens: ["HUNDRED"]),
+        DenominationPattern(label: "$50", numericTokens: ["50"], phrases: [], wordTokens: ["FIFTY"]),
+        DenominationPattern(label: "$20", numericTokens: ["20"], phrases: [], wordTokens: ["TWENTY"]),
+        DenominationPattern(label: "$10", numericTokens: ["10"], phrases: [], wordTokens: ["TEN"]),
+        DenominationPattern(label: "$5", numericTokens: ["5"], phrases: [], wordTokens: ["FIVE"]),
+        DenominationPattern(label: "$2", numericTokens: ["2"], phrases: ["TWO DOLLARS"], wordTokens: ["TWO"]),
+        DenominationPattern(label: "$1", numericTokens: ["1"], phrases: ["ONE DOLLAR"], wordTokens: [])
+    ]
 
     init() {
         loadModel()
@@ -608,7 +705,7 @@ final class CurrencyIdentifierViewModel: ObservableObject {
             let request = VNCoreMLRequest(model: modelInfo.vnModel) { [weak self] request, _ in
                 self?.handleResults(request: request)
             }
-            request.imageCropAndScaleOption = .centerCrop
+            request.imageCropAndScaleOption = .scaleFit
             self.request = request
             diagnostics.computeUnits = VisionCoreMLPipeline.computeUnitsDescription(modelInfo.computeUnits)
             diagnostics.usesNeuralEngine = modelInfo.usesNeuralEngine
@@ -640,34 +737,27 @@ final class CurrencyIdentifierViewModel: ObservableObject {
                 self.performOCRFallback(on: buffer)
             }
             let elapsed = (CACurrentMediaTime() - start) * 1000
-            DispatchQueue.main.async {
-                self.diagnostics.inferenceMs = elapsed
-                self.diagnostics.fps = self.tracker.updateFPS()
+            if self.diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    self.diagnostics.inferenceMs = elapsed
+                    self.diagnostics.fps = self.tracker.updateFPS()
+                }
             }
         }
     }
 
     private func handleResults(request: VNRequest) {
-        let results = (request.results as? [VNClassificationObservation]) ?? []
-        guard let best = results.first else {
-            setStatus("Detected: —")
-            updateTopDetections([])
-            lastPrediction = ""
-            lastAnnounced = ""
-            stableFrames = 0
+        let results = ((request.results as? [VNClassificationObservation]) ?? [])
+            .sorted { $0.confidence > $1.confidence }
+        guard let best = results.first,
+              Double(best.confidence) >= minimumModelConfidence,
+              let label = standardizedDenominationLabel(from: best.identifier) else {
+            setStatus("Hold bill steady")
+            updateTopDetections(results.prefix(3).map { "\($0.identifier) \(Int($0.confidence * 100))%" })
+            resetStableCurrency()
             return
         }
-        let label = best.identifier.replacingOccurrences(of: "_", with: " ")
-        if label == lastPrediction {
-            stableFrames += 1
-        } else {
-            lastPrediction = label
-            stableFrames = 1
-        }
-        if stableFrames >= requiredStableFrames, label != lastAnnounced {
-            lastAnnounced = label
-            setStatus("Detected: \(label)")
-        }
+        publishStableCurrency(label: label, confidence: Double(best.confidence), source: "Model")
         updateTopDetections(results.prefix(3).map { "\($0.identifier) \(Int($0.confidence * 100))%" })
     }
 
@@ -675,43 +765,152 @@ final class CurrencyIdentifierViewModel: ObservableObject {
         let request = VNRecognizeTextRequest { [weak self] request, _ in
             guard let self else { return }
             let observations = (request.results as? [VNRecognizedTextObservation]) ?? []
-            let combined = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-            let detected = self.detectDenomination(in: combined)
-            self.setStatus(detected)
-            self.updateTopDetections(["OCR fallback"])
+            let candidates = observations.flatMap { observation in
+                observation.topCandidates(3).map {
+                    TextCandidate(text: $0.string, confidence: Double($0.confidence))
+                }
+            }
+            guard let evidence = self.bestCurrencyEvidence(from: candidates),
+                  evidence.confidence >= self.minimumOCRConfidence else {
+                self.setStatus("Hold bill steady")
+                self.updateTopDetections(["OCR: no confident denomination"])
+                self.resetStableCurrency()
+                return
+            }
+            self.publishStableCurrency(label: evidence.label, confidence: evidence.confidence, source: "OCR")
+            let clueText = evidence.clues.prefix(3).joined(separator: ", ")
+            self.updateTopDetections(["OCR \(evidence.label) \(Int(evidence.confidence * 100))%", "Clues: \(clueText)"])
         }
         request.recognitionLevel = .fast
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["en-US"]
+        request.minimumTextHeight = 0.015
+        request.customWords = [
+            "ONE", "TWO", "FIVE", "TEN", "TWENTY", "FIFTY", "HUNDRED",
+            "DOLLAR", "DOLLARS", "FEDERAL", "RESERVE", "TREASURY"
+        ]
         let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
         try? handler.perform([request])
     }
 
-    private func detectDenomination(in text: String) -> String {
-        let normalized = text.replacingOccurrences(of: " ", with: "")
-        let candidates = ["100", "50", "20", "10", "5", "1"]
-        for value in candidates {
-            if normalized.contains(value) {
-                return "Detected: $\(value)"
+    private func bestCurrencyEvidence(from candidates: [TextCandidate]) -> CurrencyEvidence? {
+        guard !candidates.isEmpty else { return nil }
+        let combinedText = candidates.map(\.text).joined(separator: " ").uppercased()
+        let contextBonus = currencyContextBonus(in: combinedText)
+        var bestEvidence: CurrencyEvidence?
+
+        for pattern in denominationPatterns {
+            var score = 0.0
+            var clues: [String] = []
+
+            for candidate in candidates {
+                let text = candidate.text.uppercased()
+                let tokens = tokens(in: text)
+                let confidenceWeight = max(0.35, min(candidate.confidence, 1.0))
+
+                for number in pattern.numericTokens where tokens.contains(number) {
+                    score += 3.2 * confidenceWeight
+                    clues.append(number)
+                }
+                for phrase in pattern.phrases where text.contains(phrase) {
+                    score += 3.4 * confidenceWeight
+                    clues.append(phrase.capitalized)
+                }
+                for word in pattern.wordTokens where tokens.contains(word) {
+                    score += 2.8 * confidenceWeight
+                    clues.append(word.capitalized)
+                }
+            }
+
+            guard score > 0 else { continue }
+            score += contextBonus
+            let confidence = min(0.99, score / 7.0)
+            let evidence = CurrencyEvidence(
+                label: pattern.label,
+                confidence: confidence,
+                score: score,
+                clues: Array(Set(clues)).sorted()
+            )
+            if bestEvidence == nil || evidence.score > bestEvidence!.score {
+                bestEvidence = evidence
             }
         }
-        return "Detected: —"
+
+        return bestEvidence
+    }
+
+    private func currencyContextBonus(in text: String) -> Double {
+        let contextWords = ["UNITED", "STATES", "FEDERAL", "RESERVE", "NOTE", "TREASURY", "AMERICA", "DOLLAR", "DOLLARS"]
+        let matches = contextWords.filter { text.contains($0) }.count
+        return min(1.5, Double(matches) * 0.30)
+    }
+
+    private func tokens(in text: String) -> Set<String> {
+        let separators = CharacterSet.alphanumerics.inverted
+        let parts = text
+            .uppercased()
+            .components(separatedBy: separators)
+            .filter { !$0.isEmpty }
+        return Set(parts)
+    }
+
+    private func standardizedDenominationLabel(from identifier: String) -> String? {
+        let text = identifier.uppercased().replacingOccurrences(of: "_", with: " ")
+        if text.contains("100") || text.contains("HUNDRED") { return "$100" }
+        if text.contains("50") || text.contains("FIFTY") { return "$50" }
+        if text.contains("20") || text.contains("TWENTY") { return "$20" }
+        if text.contains("10") || text.contains("TEN") { return "$10" }
+        if text.contains("5") || text.contains("FIVE") { return "$5" }
+        if text.contains("2") || text.contains("TWO") { return "$2" }
+        if text.contains("1") || text.contains("ONE") { return "$1" }
+        return nil
+    }
+
+    private func publishStableCurrency(label: String, confidence: Double, source: String) {
+        if label == lastPrediction {
+            stableFrames += 1
+        } else {
+            lastPrediction = label
+            stableFrames = 1
+        }
+
+        guard stableFrames >= requiredStableFrames || confidence >= 0.82 else {
+            setStatus("Confirming \(label)")
+            return
+        }
+        guard label != lastPublished else { return }
+        lastPublished = label
+        setStatus("Detected: \(label)")
+        updateTopDetections(["\(source) \(label) \(Int(confidence * 100))%"])
+    }
+
+    private func resetStableCurrency() {
+        lastPrediction = ""
+        lastPublished = ""
+        stableFrames = 0
     }
 
     private func updateTopDetections(_ detections: [String]) {
+        guard diagnosticsEnabled else { return }
         DispatchQueue.main.async {
-            self.diagnostics.topDetections = detections
+            if self.diagnostics.topDetections != detections {
+                self.diagnostics.topDetections = detections
+            }
         }
     }
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 
     private func shouldProcess() -> Bool {
         guard !isProcessing else { return false }
         let now = Date()
-        guard now.timeIntervalSince(lastProcess) > 0.8 else { return false }
+        guard now.timeIntervalSince(lastProcess) > 0.9 else { return false }
         lastProcess = now
         return true
     }
@@ -720,6 +919,7 @@ final class CurrencyIdentifierViewModel: ObservableObject {
 final class PeopleDetectionViewModel: ObservableObject {
     @Published var statusText: String = "No people detected"
     @Published var diagnostics = DiagnosticsInfo()
+    var diagnosticsEnabled = false
 
     private let queue = DispatchQueue(label: "echosight.people.detect", qos: .userInitiated)
     private var isProcessing = false
@@ -742,12 +942,14 @@ final class PeopleDetectionViewModel: ObservableObject {
             let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
             try? handler.perform([request])
             let elapsed = (CACurrentMediaTime() - start) * 1000
-            DispatchQueue.main.async {
-                self.diagnostics.inferenceMs = elapsed
-                self.diagnostics.fps = self.tracker.updateFPS()
-                self.diagnostics.computeUnits = "Vision"
-                self.diagnostics.usesNeuralEngine = false
-                self.diagnostics.modelName = "VNDetectHumanRectangles"
+            if self.diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    self.diagnostics.inferenceMs = elapsed
+                    self.diagnostics.fps = self.tracker.updateFPS()
+                    self.diagnostics.computeUnits = "Vision"
+                    self.diagnostics.usesNeuralEngine = false
+                    self.diagnostics.modelName = "VNDetectHumanRectangles"
+                }
             }
         }
     }
@@ -755,8 +957,12 @@ final class PeopleDetectionViewModel: ObservableObject {
     private func updateStatus(from observations: [VNHumanObservation]) {
         guard !observations.isEmpty else {
             setStatus("No people detected")
-            DispatchQueue.main.async {
-                self.diagnostics.topDetections = []
+            if diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    if !self.diagnostics.topDetections.isEmpty {
+                        self.diagnostics.topDetections = []
+                    }
+                }
             }
             return
         }
@@ -770,14 +976,21 @@ final class PeopleDetectionViewModel: ObservableObject {
         if right > 0 { parts.append("\(right) right") }
         let summary = parts.joined(separator: ", ")
         setStatus("People: \(summary)")
-        DispatchQueue.main.async {
-            self.diagnostics.topDetections = ["People: \(summary)"]
+        if diagnosticsEnabled {
+            DispatchQueue.main.async {
+                let detections = ["People: \(summary)"]
+                if self.diagnostics.topDetections != detections {
+                    self.diagnostics.topDetections = detections
+                }
+            }
         }
     }
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 
@@ -793,6 +1006,7 @@ final class PeopleDetectionViewModel: ObservableObject {
 final class CrosswalkSignalViewModel: ObservableObject {
     @Published var statusText: String = "Signal: Unknown"
     @Published var diagnostics = DiagnosticsInfo()
+    var diagnosticsEnabled = false
 
     private let queue = DispatchQueue(label: "echosight.crosswalk.detect", qos: .userInitiated)
     private var isProcessing = false
@@ -836,9 +1050,11 @@ final class CrosswalkSignalViewModel: ObservableObject {
             let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)
             try? handler.perform([request])
             let elapsed = (CACurrentMediaTime() - start) * 1000
-            DispatchQueue.main.async {
-                self.diagnostics.inferenceMs = elapsed
-                self.diagnostics.fps = self.tracker.updateFPS()
+            if self.diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    self.diagnostics.inferenceMs = elapsed
+                    self.diagnostics.fps = self.tracker.updateFPS()
+                }
             }
         }
     }
@@ -864,21 +1080,26 @@ final class CrosswalkSignalViewModel: ObservableObject {
     }
 
     private func updateTopDetections(_ detections: [String]) {
+        guard diagnosticsEnabled else { return }
         DispatchQueue.main.async {
-            self.diagnostics.topDetections = detections
+            if self.diagnostics.topDetections != detections {
+                self.diagnostics.topDetections = detections
+            }
         }
     }
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 
     private func shouldProcess() -> Bool {
         guard !isProcessing else { return false }
         let now = Date()
-        guard now.timeIntervalSince(lastProcess) > 0.3 else { return false }
+        guard now.timeIntervalSince(lastProcess) > 0.55 else { return false }
         lastProcess = now
         return true
     }
@@ -887,6 +1108,7 @@ final class CrosswalkSignalViewModel: ObservableObject {
 final class PathGuidanceViewModel: ObservableObject {
     @Published var statusText: String = "Guidance: —"
     @Published var diagnostics = DiagnosticsInfo()
+    var diagnosticsEnabled = false
 
     private let queue = DispatchQueue(label: "echosight.path.guidance", qos: .userInitiated)
     private var isProcessing = false
@@ -913,13 +1135,17 @@ final class PathGuidanceViewModel: ObservableObject {
             }
             self.setStatus(status)
             let elapsed = (CACurrentMediaTime() - start) * 1000
-            DispatchQueue.main.async {
-                self.diagnostics.inferenceMs = elapsed
-                self.diagnostics.fps = self.tracker.updateFPS()
-                self.diagnostics.computeUnits = "Heuristic"
-                self.diagnostics.usesNeuralEngine = false
-                self.diagnostics.modelName = "PathGuidance (Heuristic)"
-                self.diagnostics.topDetections = [status]
+            if self.diagnosticsEnabled {
+                DispatchQueue.main.async {
+                    self.diagnostics.inferenceMs = elapsed
+                    self.diagnostics.fps = self.tracker.updateFPS()
+                    self.diagnostics.computeUnits = "Heuristic"
+                    self.diagnostics.usesNeuralEngine = false
+                    self.diagnostics.modelName = "PathGuidance (Heuristic)"
+                    if self.diagnostics.topDetections != [status] {
+                        self.diagnostics.topDetections = [status]
+                    }
+                }
             }
         }
     }
@@ -956,7 +1182,9 @@ final class PathGuidanceViewModel: ObservableObject {
 
     private func setStatus(_ text: String) {
         DispatchQueue.main.async {
-            self.statusText = text
+            if self.statusText != text {
+                self.statusText = text
+            }
         }
     }
 

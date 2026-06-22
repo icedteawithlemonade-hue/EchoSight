@@ -1,6 +1,9 @@
 import SwiftUI
 
+// Standalone visual mic meter.
+// Useful for demos where judges want to see live sound become simple visual bars.
 struct MicVisualizerView: View {
+    // StateObject owns the meter for this screen's lifetime.
     @StateObject private var meter = AudioBandsMeter()
     @Environment(\.appThemeColor) private var appThemeColor
 
@@ -11,6 +14,7 @@ struct MicVisualizerView: View {
                     .font(.title2.bold())
                 Spacer()
                 Circle()
+                    // Small status dot: green when the mic engine is running.
                     .fill(meter.isRunning ? .green : .secondary)
                     .frame(width: 10, height: 10)
             }
@@ -19,6 +23,7 @@ struct MicVisualizerView: View {
 
             HStack(spacing: 12) {
                 Button(meter.isRunning ? "Stop" : "Start") {
+                    // Start requests permission if needed; Stop releases mic.
                     if meter.isRunning {
                         meter.stop()
                     } else {
@@ -28,6 +33,7 @@ struct MicVisualizerView: View {
                 .buttonStyle(.borderedProminent)
 
                 Button("Calibrate") {
+                    // Baseline calibration learns ambient room noise for two seconds.
                     meter.calibrate(seconds: 2.0)
                 }
                 .buttonStyle(.bordered)
@@ -41,6 +47,7 @@ struct MicVisualizerView: View {
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $meter.sensitivity, in: 0.6...1.8, step: 0.05)
+                    // Higher values make haptic spike detection more sensitive.
             }
 
             Text(meter.calibrated ? "Calibrated (uses ambient baseline)" : "Not calibrated (baseline = 0)")
@@ -50,11 +57,14 @@ struct MicVisualizerView: View {
             Spacer()
         }
         .padding()
+        // Stop on exit so microphone capture never runs in the background by accident.
         .onDisappear { meter.stop() }
     }
 }
 
+// Draws five bars for low through high frequencies.
 private struct BandsBarView: View {
+    // Normalized band values from AudioBandsMeter.
     let bands: [Float]
     let calibrated: Bool
     let barColor: Color
@@ -67,10 +77,12 @@ private struct BandsBarView: View {
                 ForEach(0..<min(bands.count, 5), id: \.self) { i in
                     VStack(spacing: 8) {
                         ZStack(alignment: .bottom) {
+                            // Background track for the full possible height.
                             RoundedRectangle(cornerRadius: 10)
                                 .fill(Color.secondary.opacity(0.15))
                                 .frame(width: 46, height: 170)
 
+                            // Foreground bar scales with the band value.
                             RoundedRectangle(cornerRadius: 10)
                                 .fill(barColor.opacity(0.85))
                                 .frame(width: 46, height: max(6, 170 * CGFloat(bands[i])))

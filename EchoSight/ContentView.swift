@@ -1,7 +1,12 @@
 import SwiftUI
 
+// Legacy prototype screen kept for quick camera experiments.
+// The shipped app currently starts from RootView, not ContentView, but this file
+// is useful when testing CameraManager by itself during development.
 struct ContentView: View {
+    // Local toggle for showing/hiding the prototype camera preview.
     @State private var showCamera = false
+    // Prototype owns its own CameraManager separate from the shipped pages.
     @StateObject private var cameraManager = CameraManager()
     
     var body: some View {
@@ -18,7 +23,8 @@ struct ContentView: View {
                     .font(.largeTitle)
                     .bold()
 
-                Button(showCamera ? "skibidi camera" : "Camera") {
+                Button(showCamera ? "Hide Camera" : "Camera") {
+                    // Toggle camera preview for quick CameraManager testing.
                     if showCamera {
                         cameraManager.stop()
                         showCamera = false
@@ -31,6 +37,7 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
 
                 Button("Read aloud") {
+                    // Placeholder prototype button from early development.
                     print("Button 2 tapped")
                 }
                 .buttonStyle(.borderedProminent)
@@ -41,6 +48,7 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
 
                 if showCamera {
+                    // Raw preview layer shown without detection overlay.
                     CameraPreview(session: cameraManager.session)
                         .frame(height: 300)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -53,6 +61,7 @@ struct ContentView: View {
             .padding()
             .navigationTitle("Visual Assist")
             .onDisappear {
+                // Always stop camera when leaving this prototype screen.
                 cameraManager.stop()
             }
         }
@@ -60,6 +69,7 @@ struct ContentView: View {
 }
 
 struct SecondView: View {
+    // Placeholder navigation target used while testing NavigationStack.
     var body: some View {
         Text("Second Screen")
             .font(.title)

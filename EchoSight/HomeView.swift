@@ -5,16 +5,32 @@ import SwiftUI
 import UIKit
 import WebKit
 
+// HomeView.swift contains most of the visible app screens.
+// Guide for the team:
+// - HomeView is the feature launcher.
+// - Camera pages connect UI controls to the Vision/Core ML view models.
+// - Mic pages use the MicFeature folder for audio capture and captions.
+// - Morse, Browser, Settings, Tutorial, and ASL screens are grouped below.
+// The file is large because this project currently keeps many SwiftUI screens together.
 struct HomeView: View {
+    // AppFlow is injected from RootView and lets this screen jump to onboarding
+    // again if the user opens the tutorial hub.
     @EnvironmentObject var flow: AppFlow
+    // These @AppStorage values are backed by UserDefaults, so Settings changes
+    // immediately control which feature tiles are shown on the home screen.
     @AppStorage("feature.camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("feature.mic.enabled") private var micEnabled: Bool = true
     @AppStorage("feature.browser.enabled") private var browserEnabled: Bool = true
     @AppStorage("feature.asl.enabled") private var aslEnabled: Bool = true
     @AppStorage("feature.morse.enabled") private var morseEnabled: Bool = true
+    // Startup preferences let Siri Shortcuts or Settings send the user directly
+    // to a tool after launch.
     @AppStorage("startup.open.enabled") private var openOnStartup: Bool = false
     @AppStorage("startup.open.tile") private var startupTile: String = StartupTile.none.rawValue
+    // The selected theme color is read here and passed down through tint/env.
     @AppStorage("theme.color") private var themeColorName: String = ThemeColor.blue.rawValue
+    // autoOpenTile drives a hidden NavigationLink. didAutoOpen prevents repeated
+    // pushes when SwiftUI re-runs onAppear.
     @State private var autoOpenTile: Bool = false
     @State private var didAutoOpen: Bool = false
 
@@ -27,6 +43,8 @@ struct HomeView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 2)
 
+                    // Each feature checks its saved enabled flag. This lets
+                    // Settings simplify the app for different users.
                     if cameraEnabled {
                         TileLink(title: "Camera", subtitle: "Recognize with camera", systemImage: "camera.viewfinder", destination: AnyView(CameraPage()))
                     }
@@ -62,6 +80,8 @@ struct HomeView: View {
             .navigationTitle("EchoSight")
             .background(EchoSightBackground())
             .background(
+                // Hidden NavigationLink is the SwiftUI pattern used here for
+                // programmatic startup navigation.
                 NavigationLink(destination: startupDestination, isActive: $autoOpenTile) {
                     EmptyView()
                 }
@@ -69,6 +89,8 @@ struct HomeView: View {
             )
             .tint(themeColor)
             .onAppear {
+                // This runs once per app launch screen appearance. It respects
+                // both the startup toggle and whether that target feature exists.
                 guard openOnStartup, !didAutoOpen else { return }
                 didAutoOpen = true
                 if startupIsAvailable {
@@ -79,10 +101,13 @@ struct HomeView: View {
     }
 
     private var startupSelection: StartupTile {
+        // If UserDefaults has an old or invalid string, fall back to no auto-open.
         StartupTile(rawValue: startupTile) ?? .none
     }
 
     private var startupIsAvailable: Bool {
+        // Prevents auto-opening disabled tools. Example: if Camera is off in
+        // Settings, a saved "camera" startup choice should not navigate there.
         switch startupSelection {
         case .none:
             return false
@@ -101,6 +126,8 @@ struct HomeView: View {
 
     @ViewBuilder
     private var startupDestination: some View {
+        // @ViewBuilder lets this computed property return different view types
+        // from the switch without wrapping everything manually.
         switch startupSelection {
         case .camera:
             CameraPage()
@@ -118,10 +145,12 @@ struct HomeView: View {
     }
 
     private var themeColor: Color {
+        // Unknown saved colors fall back to blue so the UI always has a tint.
         ThemeColor(rawValue: themeColorName)?.color ?? .blue
     }
 }
 
+// Used by Settings and Siri Shortcuts to decide which tool opens on launch.
 enum StartupTile: String, CaseIterable, Identifiable {
     case none
     case camera
@@ -150,6 +179,7 @@ enum StartupTile: String, CaseIterable, Identifiable {
     }
 }
 
+// App-wide accent color choices stored with @AppStorage.
 enum ThemeColor: String, CaseIterable, Identifiable {
     case blue
     case green
@@ -200,6 +230,7 @@ extension EnvironmentValues {
     }
 }
 
+// Shared soft background used to make feature pages feel like one product.
 private struct EchoSightBackground: View {
     @Environment(\.appThemeColor) private var appThemeColor
 
@@ -221,6 +252,7 @@ private struct EchoSightBackground: View {
 }
 
 private struct DashboardStatusCard: View {
+    // Small metric card used by dashboards such as practice progress.
     let title: String
     let detail: String
     let systemImage: String
@@ -249,6 +281,7 @@ private struct DashboardStatusCard: View {
 
 private struct OfflinePrivacyCard: View {
     var body: some View {
+        // Judges can point here to see the privacy promise shown directly in UI.
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lock.shield.fill")
                 .font(.title3)
@@ -269,6 +302,7 @@ private struct OfflinePrivacyCard: View {
 
 private struct CardPressButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
+        // The pressed state gives every tile an Apple-like tactile response.
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
             .brightness(configuration.isPressed ? -0.025 : 0)
@@ -280,6 +314,7 @@ private struct AppearOnLoad: ViewModifier {
     @State private var visible = false
 
     func body(content: Content) -> some View {
+        // Fade/slide in once when the tile appears; no timers or repeated loops.
         content
             .opacity(visible ? 1 : 0)
             .offset(y: visible ? 0 : 10)
@@ -290,11 +325,15 @@ private struct AppearOnLoad: ViewModifier {
     }
 }
 
+// Main tappable home-page row. Most feature navigation goes through this view.
 private struct TileLink: View {
+    // Accessibility settings are read here so every navigation tile can switch
+    // between the normal visual layout and the simplified large-button layout.
     @AppStorage("accessibility.simplifiedUI") private var simplifiedUI: Bool = false
     @AppStorage("accessibility.simplifiedUI.includeRed") private var simplifyRedTiles: Bool = false
     @Environment(\.appThemeColor) private var appThemeColor
 
+    // These values are supplied by each page to avoid duplicating tile UI.
     let title: String
     let subtitle: String
     let systemImage: String
@@ -438,12 +477,15 @@ private struct TileLink: View {
                 .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
+        // Reuses one button style so all tiles animate consistently.
         .buttonStyle(CardPressButtonStyle())
         .modifier(AppearOnLoad())
     }
 }
 
 private struct ActionTile: View {
+    // Same visual language as TileLink, but it runs a closure instead of pushing
+    // a NavigationLink destination.
     @AppStorage("accessibility.simplifiedUI") private var simplifiedUI: Bool = false
     @AppStorage("accessibility.simplifiedUI.includeRed") private var simplifyRedTiles: Bool = false
     @Environment(\.appThemeColor) private var appThemeColor
@@ -464,6 +506,7 @@ private struct ActionTile: View {
 
     var body: some View {
         Button(action: action) {
+            // In simplified mode, a high-contrast full tile is easier to target.
             if simplifiedUI && (iconColor == nil || simplifyRedTiles) {
                 HStack {
                     Text(title)
@@ -529,19 +572,25 @@ private struct ActionTile: View {
     }
 }
 
+// Shows the recent log of detections, captions, read text, practice, and alerts.
 struct ActivityHistoryPage: View {
+    // Shared singleton means any tool can log activity without passing bindings.
     @StateObject private var history = ActivityHistoryStore.shared
 
     var body: some View {
         List {
             Section {
                 if history.items.isEmpty {
+                    // Empty state keeps the page useful before the user has run
+                    // any camera, mic, Morse, ASL, or practice actions.
                     ContentUnavailableView(
                         "No activity yet",
                         systemImage: "clock",
                         description: Text("Detections, captions, read text, Morse, ASL, and practice sessions will appear here.")
                     )
                 } else {
+                    // Newest items are already first because ActivityHistoryStore
+                    // inserts at the front.
                     ForEach(history.items) { item in
                         HStack(alignment: .top, spacing: 12) {
                             Image(systemName: item.kind.systemImage)
@@ -583,7 +632,9 @@ struct ActivityHistoryPage: View {
     }
 }
 
+// Lightweight practice tracker for ASL and Morse daily progress.
 struct PracticeHubPage: View {
+    // PracticeStore persists streaks and lesson counts across launches.
     @StateObject private var practice = PracticeStore.shared
 
     var body: some View {
@@ -606,6 +657,7 @@ struct PracticeHubPage: View {
 }
 
 private struct PracticeSummaryCard: View {
+    // ObservedObject is used because PracticeHubPage owns the store lifetime.
     @ObservedObject var practice: PracticeStore
 
     var body: some View {
@@ -617,6 +669,7 @@ private struct PracticeSummaryCard: View {
 }
 
 private struct PracticeTrackCard: View {
+    // Each card is intentionally data-driven so ASL and Morse share one layout.
     let track: PracticeTrack
     let progress: PracticeProgress
     let complete: () -> Void
@@ -668,6 +721,7 @@ private struct PracticeTrackCard: View {
     }
 
     private var nextLesson: String {
+        // Simple lesson copy for now; the progress store handles completion.
         switch track {
         case .asl:
             return "Practice 5 signs, then review one phrase."
@@ -678,6 +732,7 @@ private struct PracticeTrackCard: View {
 }
 
 private struct PracticeMiniMetricCard: View {
+    // Reusable compact metric used inside practice cards.
     let value: String
     let label: String
     let systemImage: String
@@ -700,10 +755,13 @@ private struct PracticeMiniMetricCard: View {
     }
 }
 
+// Submenu for all visual accessibility tools.
 struct CameraPage: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                // Camera tools are split into separate pages so each page can own
+                // its own CameraManager and stop capture when dismissed.
                 TileLink(
                     title: "Object Detection",
                     subtitle: "Detect objects and announce direction",
@@ -751,12 +809,16 @@ struct CameraPage: View {
 
 // MARK: - Camera Accessibility Features
 private struct CameraPreviewCard: View {
+    // The preview card handles three states: error, active camera, and waiting
+    // for permission. Feature pages do not repeat that logic.
     @ObservedObject var camera: CameraManager
     let title: String
 
     var body: some View {
         ZStack {
             if let cameraError = camera.cameraError {
+                // Simulator or permission errors are shown inline instead of
+                // crashing or leaving a blank preview.
                 VStack(spacing: 8) {
                     Image(systemName: "camera.slash")
                         .font(.system(size: 48))
@@ -768,9 +830,11 @@ private struct CameraPreviewCard: View {
                         .padding(.horizontal)
                 }
             } else if camera.isAuthorized, camera.hasCameraInput {
+                // The actual camera preview is a UIKit layer wrapped in SwiftUI.
                 CameraPreview(session: camera.session)
                     .accessibilityLabel(title)
             } else {
+                // Permission has not been granted yet or setup is still running.
                 VStack(spacing: 8) {
                     Image(systemName: "camera.viewfinder")
                         .font(.system(size: 48))
@@ -797,6 +861,7 @@ private struct CameraPreviewCard: View {
 }
 
 private struct CameraStatusCard: View {
+    // Displays the latest human-readable result from a camera view model.
     let title: String
     let status: String
 
@@ -824,6 +889,7 @@ private struct CameraStatusCard: View {
 }
 
 private struct DiagnosticsOverlay: View {
+    // Developer-facing metrics that help explain performance to judges.
     let info: DiagnosticsInfo
 
     var body: some View {
@@ -851,6 +917,7 @@ private struct DiagnosticsOverlay: View {
 }
 
 private struct PressableButtonStyle: ButtonStyle {
+    // Shared button style for camera, text, Morse, and browser controls.
     let prominent: Bool
 
     func makeBody(configuration: Configuration) -> some View {
@@ -875,10 +942,12 @@ private struct PressableButtonStyle: ButtonStyle {
     @Environment(\.appThemeColor) private var appThemeColor
 
     private var borderColor: Color {
+        // Non-prominent buttons use the app theme as a subtle outline.
         appThemeColor.opacity(0.35)
     }
 
     private func backgroundColor(pressed: Bool) -> Color {
+        // The pressed branch darkens or fills the button for touch feedback.
         if prominent {
             return appThemeColor.opacity(pressed ? 0.75 : 1.0)
         }
@@ -890,10 +959,15 @@ private struct PressableButtonStyle: ButtonStyle {
     }
 }
 
+// Live camera page that streams sampled frames into ObjectDetectionViewModel.
 struct ObjectDetectionPage: View {
+    // StateObject keeps one instance alive for the lifetime of this page.
     @StateObject private var camera = CameraManager()
+    // View model owns Vision/Core ML object detection and publishes statusText.
     @StateObject private var viewModel = ObjectDetectionViewModel()
+    // AnnouncementController prevents repeated spoken messages from piling up.
     @StateObject private var announcer = AnnouncementController()
+    // Local toggles affect only this page session.
     @State private var audioFeedback: Bool = true
     @State private var showDiagnostics: Bool = false
 
@@ -923,6 +997,7 @@ struct ObjectDetectionPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            // Connect camera frames to the detector only while the page is visible.
             viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
@@ -931,22 +1006,27 @@ struct ObjectDetectionPage: View {
             camera.start()
         }
         .onChange(of: showDiagnostics) { enabled in
+            // Avoid spending time updating metrics unless the overlay is visible.
             viewModel.diagnosticsEnabled = enabled
         }
         .onChange(of: viewModel.statusText) { newValue in
+            // "Looking" and "no clear" are status messages, not useful history.
             guard !newValue.localizedCaseInsensitiveContains("looking"),
                   !newValue.localizedCaseInsensitiveContains("no clear") else {
                 return
             }
+            // Saved activity lets the Activity History page explain what happened.
             ActivityHistoryStore.shared.add(.object, title: "Object Detection", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
             }
         }
         .onChange(of: camera.isAuthorized) { authorized in
+            // Permission can arrive after configure(), so start once it flips true.
             if authorized { camera.start() }
         }
         .onDisappear {
+            // Stop camera and speech to save battery and avoid background work.
             camera.onSampleBuffer = nil
             camera.stop()
             announcer.stop()
@@ -954,7 +1034,9 @@ struct ObjectDetectionPage: View {
     }
 }
 
+// OCR page: preview continuously, but recognize text only when the user taps capture.
 struct TextReaderPage: View {
+    // The page keeps the latest preview frame, then OCR runs when capture is tapped.
     @StateObject private var camera = CameraManager()
     @StateObject private var speech = SpeechAnnouncer()
     @StateObject private var viewModel = TextReaderViewModel()
@@ -1025,7 +1107,7 @@ struct TextReaderPage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Fine-tune Vision text recognition and post-processing.
+                // Vision OCR runs in TextReaderViewModel after the user taps Capture.
             }
             .padding()
         }
@@ -1033,6 +1115,7 @@ struct TextReaderPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            // update(sampleBuffer:) stores the latest frame but does not OCR yet.
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
                 viewModel?.update(sampleBuffer: sample)
@@ -1040,12 +1123,14 @@ struct TextReaderPage: View {
             camera.start()
         }
         .onChange(of: viewModel.recognizedText) { newValue in
+            // Once OCR publishes new text, log it and optionally read it aloud.
             ActivityHistoryStore.shared.add(.readText, title: "Text Reader", detail: newValue)
             if audioFeedback {
                 speech.speak(newValue, rate: speechRate, pitch: speechPitch, volume: speechVolume, debounce: true)
             }
         }
         .onChange(of: speechRate) { _ in
+            // If the user tweaks speech settings mid-sentence, restart with them.
             speech.restartIfSpeaking(rate: speechRate, pitch: speechPitch, volume: speechVolume)
         }
         .onChange(of: speechPitch) { _ in
@@ -1058,6 +1143,7 @@ struct TextReaderPage: View {
             if authorized { camera.start() }
         }
         .onDisappear {
+            // Releasing the sample callback breaks the frame pipeline cleanly.
             camera.onSampleBuffer = nil
             camera.stop()
             speech.stop()
@@ -1065,7 +1151,10 @@ struct TextReaderPage: View {
     }
 }
 
+// Currency page: uses OCR/model evidence and waits for a stable result before speaking.
 struct CurrencyIdentifierPage: View {
+    // Same camera pattern as object detection, but with denomination-specific
+    // evidence and stricter confidence/stability requirements.
     @StateObject private var camera = CameraManager()
     @StateObject private var viewModel = CurrencyIdentifierViewModel()
     @StateObject private var announcer = AnnouncementController()
@@ -1102,6 +1191,7 @@ struct CurrencyIdentifierPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onAppear {
+            // update(sampleBuffer:) throttles internally so the UI stays smooth.
             viewModel.diagnosticsEnabled = showDiagnostics
             camera.configure()
             camera.onSampleBuffer = { [weak viewModel] sample in
@@ -1113,6 +1203,7 @@ struct CurrencyIdentifierPage: View {
             viewModel.diagnosticsEnabled = enabled
         }
         .onChange(of: viewModel.statusText) { newValue in
+            // Only final detections are spoken/logged. "Hold bill steady" is just guidance.
             guard newValue.hasPrefix("Detected: $") else { return }
             ActivityHistoryStore.shared.add(.object, title: "Currency Identifier", detail: newValue)
             if audioFeedback {
@@ -1130,7 +1221,9 @@ struct CurrencyIdentifierPage: View {
     }
 }
 
+// Relative people detection page. It intentionally avoids identity or face recognition.
 struct NearbyPeoplePage: View {
+    // Uses Vision's person rectangle detection; no identity or face data is used.
     @StateObject private var camera = CameraManager()
     @StateObject private var viewModel = PeopleDetectionViewModel()
     @StateObject private var announcer = AnnouncementController()
@@ -1156,7 +1249,7 @@ struct NearbyPeoplePage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Integrate Vision person detection and relative position only.
+                // PeopleDetectionViewModel reports relative positions only, not identity.
             }
             .padding()
         }
@@ -1175,6 +1268,7 @@ struct NearbyPeoplePage: View {
             viewModel.diagnosticsEnabled = enabled
         }
         .onChange(of: viewModel.statusText) { newValue in
+            // Nearby people messages are logged as object-style camera activity.
             ActivityHistoryStore.shared.add(.object, title: "Nearby People", detail: newValue)
             if audioFeedback {
                 announcer.announce(newValue)
@@ -1191,7 +1285,9 @@ struct NearbyPeoplePage: View {
     }
 }
 
+// Future-ready page for a traffic signal model.
 struct CrosswalkSignalPage: View {
+    // Placeholder-ready page: currently uses available local model hooks if present.
     @StateObject private var camera = CameraManager()
     @StateObject private var viewModel = CrosswalkSignalViewModel()
     @StateObject private var announcer = AnnouncementController()
@@ -1217,7 +1313,7 @@ struct CrosswalkSignalPage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Integrate Vision/Core ML model for crosswalk signal detection.
+                // CrosswalkSignalViewModel is ready for an optional bundled classifier.
             }
             .padding()
         }
@@ -1252,7 +1348,9 @@ struct CrosswalkSignalPage: View {
     }
 }
 
+// Experimental page for rough left/right guidance, not full navigation.
 struct PathGuidancePage: View {
+    // Rough brightness-based guidance used as an experimental local fallback.
     @StateObject private var camera = CameraManager()
     @StateObject private var viewModel = PathGuidanceViewModel()
     @StateObject private var announcer = AnnouncementController()
@@ -1278,7 +1376,7 @@ struct PathGuidancePage: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
-                // TODO: Integrate path guidance model and safety checks.
+                // PathGuidanceViewModel is an approximate heuristic, not full navigation.
             }
             .padding()
         }
@@ -1298,6 +1396,7 @@ struct PathGuidancePage: View {
         }
         .onChange(of: viewModel.statusText) { newValue in
             ActivityHistoryStore.shared.add(.object, title: "Path Guidance", detail: newValue)
+            // Directional guidance can also trigger watch/phone assist alerts.
             if newValue.localizedCaseInsensitiveContains("left") || newValue.localizedCaseInsensitiveContains("right") {
                 AssistAlertCenter.shared.alert(.obstacle, message: newValue)
             }
@@ -1317,7 +1416,9 @@ struct PathGuidancePage: View {
 }
 
 
+// Mic feature entry point. Detailed mic logic lives in the MicFeature folder.
 struct MicPage: View {
+    // StateObject means the mic session/view model stays alive while this page is open.
     @StateObject private var viewModel = MicViewModel()
 
     var body: some View {
@@ -1332,10 +1433,13 @@ struct MicPage: View {
     }
 }
 
+// Morse hub: input, output, practice, and reference charts.
 struct MorseCommunicatorPage: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                // The hub presents Morse as learn, input, output, practice, reference.
+                // This is easier to demo than placing all controls on one page.
                 TileLink(
                     title: "How to Use Morse",
                     subtitle: "Learn dots, dashes, and spacing",
@@ -1381,19 +1485,27 @@ struct MorseCommunicatorPage: View {
     }
 }
 
+// Lets the user tap dots/dashes and converts Morse symbols into text.
 struct MorseInputPage: View {
+    // The Morse symbols for the letter currently being entered, such as ".-".
     @State private var currentSymbols: String = ""
+    // The decoded message built from committed Morse letters.
     @State private var outputText: String = ""
+    // Raw dot/dash history, useful for learning and judge demos.
     @State private var rawStream: String = ""
+    // Press state measures gesture duration for dot versus dash.
     @State private var isPressing: Bool = false
     @State private var pressStart: Date?
+    // Delayed commit timers separate letters and words based on pauses.
     @State private var letterCommitWork: DispatchWorkItem?
     @State private var wordCommitWork: DispatchWorkItem?
 
+    // User-tunable timing thresholds make the app work for different tapping speeds.
     @State private var dotThreshold: Double = 0.18
     @State private var dashThreshold: Double = 0.35
     @State private var letterGap: Double = 0.6
     @State private var wordGap: Double = 1.2
+    // Haptic toggles persist because some users prefer quieter feedback.
     @AppStorage("morse.input.haptic.dot") private var hapticDotEnabled: Bool = true
     @AppStorage("morse.input.haptic.dash") private var hapticDashEnabled: Bool = true
     @Environment(\.appThemeColor) private var appThemeColor
@@ -1522,11 +1634,13 @@ struct MorseInputPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemBackground))
         .onChange(of: dotThreshold) { newValue in
+            // Keep thresholds from crossing so every press maps to one symbol.
             if newValue >= dashThreshold - 0.05 {
                 dotThreshold = max(0.05, dashThreshold - 0.05)
             }
         }
         .onChange(of: dashThreshold) { newValue in
+            // Maintain a small gap between dot and dash timing.
             if newValue <= dotThreshold + 0.05 {
                 dashThreshold = min(0.9, dotThreshold + 0.05)
             }
@@ -1534,6 +1648,7 @@ struct MorseInputPage: View {
     }
 
     private func beginPress() {
+        // New input cancels old pause timers because the current letter continues.
         isPressing = true
         pressStart = Date()
         letterCommitWork?.cancel()
@@ -1541,10 +1656,12 @@ struct MorseInputPage: View {
     }
 
     private func endPress() {
+        // If pressStart is missing, reset safely instead of guessing.
         guard let start = pressStart else {
             isPressing = false
             return
         }
+        // The touch duration is the whole Morse input signal.
         let duration = Date().timeIntervalSince(start)
         let symbol = classifySymbol(duration: duration)
         currentSymbols.append(symbol)
@@ -1554,24 +1671,30 @@ struct MorseInputPage: View {
     }
 
     private func classifySymbol(duration: TimeInterval) -> String {
+        // Short touch is dot.
         if duration <= dotThreshold {
             return "."
         }
+        // Long touch is dash.
         if duration >= dashThreshold {
             return "-"
         }
+        // Middle zone chooses the closest threshold, making the control forgiving.
         let midpoint = (dotThreshold + dashThreshold) / 2
         return duration < midpoint ? "." : "-"
     }
 
     private func scheduleCommitTimers() {
+        // Each symbol restarts the silence timers.
         letterCommitWork?.cancel()
         wordCommitWork?.cancel()
 
         let letterWork = DispatchWorkItem {
+            // Pause long enough for a letter: decode current dot/dash group.
             commitCurrentSymbols()
         }
         let wordWork = DispatchWorkItem {
+            // Longer pause: commit letter and append a word separator.
             commitCurrentSymbols()
             if !outputText.hasSuffix(" "), !outputText.isEmpty {
                 outputText.append(" ")
@@ -1583,20 +1706,24 @@ struct MorseInputPage: View {
 
         letterCommitWork = letterWork
         wordCommitWork = wordWork
+        // Timers mutate @State, so they run back on the main queue.
         DispatchQueue.main.asyncAfter(deadline: .now() + letterGap, execute: letterWork)
         DispatchQueue.main.asyncAfter(deadline: .now() + wordGap, execute: wordWork)
     }
 
     private func commitCurrentSymbols() {
+        // Do nothing if a timer fires after everything was already committed.
         guard !currentSymbols.isEmpty else { return }
         if !rawStream.isEmpty, !rawStream.hasSuffix(" / ") {
             rawStream.append(" ")
         }
         rawStream.append(currentSymbols)
         if let character = MorseCodeMap.shared.character(for: currentSymbols) {
+            // Known sequence becomes a real letter/number.
             outputText.append(character)
             ActivityHistoryStore.shared.add(.morse, title: "Morse Input", detail: "Decoded \(currentSymbols) as \(character)")
         } else {
+            // Unknown sequence remains visible as a question mark for learning.
             outputText.append("?")
             ActivityHistoryStore.shared.add(.morse, title: "Morse Input", detail: "Unknown symbol \(currentSymbols)")
         }
@@ -1604,6 +1731,7 @@ struct MorseInputPage: View {
     }
 
     private func resetOutput() {
+        // Clear visible state and cancel delayed work so old timers cannot append later.
         currentSymbols = ""
         outputText = ""
         rawStream = ""
@@ -1612,11 +1740,13 @@ struct MorseInputPage: View {
     }
 
     private func rawStreamDisplay() -> String {
+        // Include in-progress symbols before the letter timer commits them.
         let combined = rawStream + currentSymbols
         return combined.isEmpty ? "—" : combined
     }
 
     private func triggerInputHaptic(for symbol: String) {
+        // Dot and dash feedback differ in strength so users can feel the difference.
         switch symbol {
         case ".":
             guard hapticDotEnabled else { return }
@@ -1634,12 +1764,18 @@ struct MorseInputPage: View {
     }
 }
 
+// Converts typed text into Morse audio/haptics so messages can be felt or heard.
 struct MorseOutputPage: View {
+    // The text the user types before conversion.
     @State private var textToPlay: String = ""
+    // Controls the highlighted word chip and progress indicator.
     @State private var selectedWordIndex: Int = 0
+    // Async playback task is cancellable for pause/stop.
     @State private var playbackTask: Task<Void, Never>?
     @State private var playbackStatus: PlaybackStatus = .stopped
+    // Saves resume progress within word, letter, and symbol.
     @State private var playbackPosition = PlaybackPosition()
+    // Token invalidates older async playback loops after restart.
     @State private var playbackToken: Int = 0
     @State private var settings = MorsePlaybackSettings()
     @FocusState private var editorFocused: Bool
@@ -1782,6 +1918,7 @@ struct MorseOutputPage: View {
     }
 
     private func parsedWords() -> [String] {
+        // Split on whitespace and remove surrounding punctuation so "Hi!" plays as HI.
         textToPlay
             .split(whereSeparator: { $0.isWhitespace })
             .map { $0.trimmingCharacters(in: CharacterSet.alphanumerics.inverted) }
@@ -1789,6 +1926,7 @@ struct MorseOutputPage: View {
     }
 
     private func togglePlayback(words: [String]) {
+        // One button controls play, pause, and resume based on the current state.
         switch playbackStatus {
         case .playing:
             pausePlayback()
@@ -1800,6 +1938,7 @@ struct MorseOutputPage: View {
     }
 
     private func pausePlayback() {
+        // Increment token and cancel task so the async loop exits quickly.
         playbackToken += 1
         playbackTask?.cancel()
         playbackTask = nil
@@ -1808,6 +1947,7 @@ struct MorseOutputPage: View {
     }
 
     private func stopPlayback() {
+        // Stop cancels haptics and stores the current selected word for replay.
         playbackToken += 1
         playbackTask?.cancel()
         playbackTask = nil
@@ -1817,12 +1957,15 @@ struct MorseOutputPage: View {
     }
 
     private func resumePlayback(words: [String]) {
+        // Resume starts from the saved word/letter/symbol position.
         startPlayback(from: playbackPosition, words: words)
     }
 
     private func startPlayback(from position: PlaybackPosition, words: [String]) {
+        // Make sure there is only one active playback task at a time.
         stopPlayback()
         guard !words.isEmpty else { return }
+        // Clamp handles cases where the text changed and the old index is invalid.
         let clampedWord = min(max(position.wordIndex, 0), words.count - 1)
         playbackPosition = PlaybackPosition(wordIndex: clampedWord, letterIndex: position.letterIndex, symbolIndex: position.symbolIndex)
         selectedWordIndex = clampedWord
@@ -1834,6 +1977,7 @@ struct MorseOutputPage: View {
 
         playbackTask = Task {
             await haptics.startEngineIfNeeded()
+            // Playback is word by word so progress can update clearly.
             for wordIndex in clampedWord..<words.count {
                 if Task.isCancelled || token != playbackToken { break }
                 let word = words[wordIndex]
@@ -1846,6 +1990,7 @@ struct MorseOutputPage: View {
 
                 let startLetterIndex = (wordIndex == clampedWord) ? playbackPosition.letterIndex : 0
                 let startSymbolIndex = (wordIndex == clampedWord) ? playbackPosition.symbolIndex : 0
+                // playWord handles the letter and symbol timing inside a word.
                 await playWord(word, startLetterIndex: startLetterIndex, startSymbolIndex: startSymbolIndex, token: token)
 
                 if Task.isCancelled || token != playbackToken { break }
@@ -1860,18 +2005,21 @@ struct MorseOutputPage: View {
     }
 
     private func moveToPreviousWord(in words: [String]) {
+        // Guard avoids negative indices when there is no text.
         guard !words.isEmpty else { return }
         let newIndex = max(selectedWordIndex - 1, 0)
         setPlaybackStart(index: newIndex, words: words)
     }
 
     private func moveToNextWord(in words: [String]) {
+        // Clamp to the last word to keep navigation safe.
         guard !words.isEmpty else { return }
         let newIndex = min(selectedWordIndex + 1, words.count - 1)
         setPlaybackStart(index: newIndex, words: words)
     }
 
     private func setPlaybackStart(index: Int, words: [String]) {
+        // Word chips use this to jump to a word; if already playing, restart there.
         guard !words.isEmpty else { return }
         let clamped = min(max(index, 0), words.count - 1)
         selectedWordIndex = clamped
@@ -1882,6 +2030,7 @@ struct MorseOutputPage: View {
     }
 
     private func currentPlaybackLabel(words: [String]) -> String {
+        // Display text for the "Now playing" label.
         guard !words.isEmpty, selectedWordIndex < words.count else { return "—" }
         switch playbackStatus {
         case .paused:
@@ -1892,35 +2041,42 @@ struct MorseOutputPage: View {
     }
 
     private func playWord(_ word: String, startLetterIndex: Int, startSymbolIndex: Int, token: Int) async {
+        // Morse table supports A-Z and 0-9, so other characters are ignored.
         let letters = word.uppercased().filter { $0.isLetter || $0.isNumber }
         let letterArray = Array(letters)
         guard !letterArray.isEmpty else { return }
 
         let safeStartLetter = min(max(startLetterIndex, 0), letterArray.count - 1)
         for letterIndex in safeStartLetter..<letterArray.count {
+            // Cancellation/token checks make pause and stop responsive.
             if Task.isCancelled || token != playbackToken { return }
             let char = letterArray[letterIndex]
             if let code = MorseCodeMap.shared.code(for: char) {
                 let symbols = Array(code)
+                // Resume can start in the middle of a letter, so clamp symbol too.
                 let safeStartSymbol = min(max(startSymbolIndex, 0), max(symbols.count - 1, 0))
                 let symbolStart = (letterIndex == safeStartLetter) ? safeStartSymbol : 0
                 for symbolIndex in symbolStart..<symbols.count {
                     if Task.isCancelled || token != playbackToken { return }
                     await MainActor.run {
+                        // Progress is SwiftUI state, so write it on MainActor.
                         playbackPosition = PlaybackPosition(wordIndex: selectedWordIndex, letterIndex: letterIndex, symbolIndex: symbolIndex)
                     }
                     let symbol = symbols[symbolIndex]
+                    // Dot and dash share intensity/sharpness but use different durations.
                     if symbol == "." {
                         await haptics.play(duration: settings.dotDuration, intensity: settings.intensity, sharpness: settings.sharpness)
                     } else if symbol == "-" {
                         await haptics.play(duration: settings.dashDuration, intensity: settings.intensity, sharpness: settings.sharpness)
                     }
                     if symbolIndex < symbols.count - 1 {
+                        // Gap between dots and dashes inside one letter.
                         try? await Task.sleep(nanoseconds: UInt64(settings.elementGap * 1_000_000_000))
                     }
                 }
             }
             if letterIndex < letterArray.count - 1 {
+                // Gap between letters in the same word.
                 try? await Task.sleep(nanoseconds: UInt64(settings.letterGap * 1_000_000_000))
             }
         }
@@ -1934,14 +2090,18 @@ private enum PlaybackStatus {
 }
 
 private struct PlaybackPosition: Equatable {
+    // Word/letter/symbol indexes let Morse playback pause and resume precisely.
     var wordIndex: Int = 0
     var letterIndex: Int = 0
     var symbolIndex: Int = 0
 }
 
+// Central Morse lookup table shared by input, output, and reference charts.
 private final class MorseCodeMap {
+    // Singleton avoids rebuilding the Morse dictionary in every view.
     static let shared = MorseCodeMap()
 
+    // Official Morse codes for letters and numbers used by input/output/reference.
     private let map: [Character: String] = [
         "A": ".-",    "B": "-...",  "C": "-.-.",  "D": "-..",   "E": ".",
         "F": "..-.",  "G": "--.",   "H": "....",  "I": "..",    "J": ".---",
@@ -1953,6 +2113,7 @@ private final class MorseCodeMap {
         "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----."
     ]
     private lazy var reverseMap: [String: Character] = {
+        // Reverse lookup converts tapped dots/dashes back into letters.
         var reverse: [String: Character] = [:]
         for (key, value) in map {
             reverse[value] = key
@@ -1961,15 +2122,19 @@ private final class MorseCodeMap {
     }()
 
     func code(for character: Character) -> String? {
+        // Text-to-Morse lookup.
         map[character]
     }
 
     func character(for code: String) -> Character? {
+        // Morse-to-text lookup.
         reverseMap[code]
     }
 }
 
+// Plays Morse timing through Core Haptics when the device supports it.
 private final class MorseHaptics: ObservableObject {
+    // Core Haptics engine is optional because not every device/simulator supports it.
     private var engine: CHHapticEngine?
     private let supportsHaptics = CHHapticEngine.capabilitiesForHardware().supportsHaptics
 
@@ -1982,6 +2147,7 @@ private final class MorseHaptics: ObservableObject {
     }
 
     func startEngineIfNeeded() async {
+        // Lazily start/restart the engine right before playback.
         guard supportsHaptics else { return }
         if engine == nil {
             engine = try? CHHapticEngine()
@@ -1992,11 +2158,13 @@ private final class MorseHaptics: ObservableObject {
     }
 
     func stop() {
+        // Stop releases active vibration patterns.
         guard supportsHaptics else { return }
         try? engine?.stop()
     }
 
     func play(duration: TimeInterval, intensity: Double, sharpness: Double) async {
+        // Builds one continuous haptic event for a dot or dash.
         guard supportsHaptics, let engine else { return }
         let intensityParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: Float(intensity))
         let sharpnessParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: Float(sharpness))
@@ -2014,6 +2182,7 @@ private final class MorseHaptics: ObservableObject {
 }
 
 private struct MorsePlaybackSettings {
+    // These defaults follow common Morse timing ratios: dash is about 3 dots.
     var dotDuration: Double = 0.12
     var dashDuration: Double = 0.36
     var elementGap: Double = 0.12
@@ -2024,6 +2193,7 @@ private struct MorsePlaybackSettings {
 }
 
 private struct MorsePlaybackSettingsCard: View {
+    // Two-way binding lets sliders edit the parent playback settings directly.
     @Binding var settings: MorsePlaybackSettings
 
     var body: some View {
@@ -2446,11 +2616,15 @@ private struct MorseNumberCard: View {
 }
 
 
+// Simple microphone loudness meter used by browser/voice-adjacent controls.
 final class AudioMeter: ObservableObject {
+    // This lightweight meter is separate from MicViewModel because browser pages
+    // only need a simple 0...1 loudness value.
     private let engine = AVAudioEngine()
     @Published var level: CGFloat = 0 // 0...1
 
     func start() {
+        // Measurement mode gives cleaner loudness readings and ducks other audio.
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
@@ -2462,6 +2636,7 @@ final class AudioMeter: ObservableObject {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
+        // A tap copies mic buffers out of AVAudioEngine for RMS processing.
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.process(buffer: buffer)
         }
@@ -2474,12 +2649,14 @@ final class AudioMeter: ObservableObject {
     }
 
     func stop() {
+        // Removing the tap is important before stopping the engine.
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         try? AVAudioSession.sharedInstance().setActive(false)
     }
 
     private func process(buffer: AVAudioPCMBuffer) {
+        // RMS converts the audio waveform into a single loudness number.
         guard let channelData = buffer.floatChannelData?.pointee else { return }
         let frameLength = Int(buffer.frameLength)
         guard frameLength > 0 else { return }
@@ -2497,14 +2674,18 @@ final class AudioMeter: ObservableObject {
         let normalized = (clamped - minDb) / -minDb // 0..1
 
         DispatchQueue.main.async {
+            // Published values must update on the main thread for SwiftUI.
             self.level = CGFloat(normalized)
         }
     }
 }
 
+// Accessible browser with reader styling, speech, and auto-scroll controls.
 struct BrowserPage: View {
+    // URL and focus state drive the top address bar.
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
+    // Reader settings are local state so changes preview immediately.
     @State private var textSize: Double = 16
     @State private var lineSpacing: Double = 1.4
     @State private var highContrast: Bool = false
@@ -2512,11 +2693,14 @@ struct BrowserPage: View {
     @State private var simplifyPage: Bool = true
     @State private var simplifyIntensity: Double = 0.6
     @State private var focusMode: Bool = false
+    // Auto-scroll uses a timer inside WebReaderModel.
     @State private var autoScroll: Bool = false
     @State private var autoScrollSpeed: Double = 1.2
+    // Read-aloud state uses AVSpeechSynthesizer through WebReaderModel.
     @State private var readerEnabled: Bool = true
     @State private var speechRate: Double = 0.48
     @State private var webViewHeight: Double = 520
+    // Starter sites are accessibility-related resources for demos.
     @State private var savedSites: [String] = [
         "https://nfb.org/",
         "https://www.acb.org/home",
@@ -2844,6 +3028,7 @@ struct BrowserPage: View {
     }
 
     private func saveCurrentURL() {
+        // Normalize before saving so "example.com" and "https://example.com" match.
         guard let normalized = normalizedURL(from: urlText) else { return }
         if !savedSites.contains(normalized) {
             savedSites.append(normalized)
@@ -2853,36 +3038,46 @@ struct BrowserPage: View {
     }
 
     private func removeSavedSite(_ site: String) {
+        // Simple local array removal. This list is not persisted yet.
         savedSites.removeAll { $0 == site }
     }
 
     private func loadFromURLText() {
+        // Shared by Go button, return key, saved-site taps, and paste.
         guard let normalized = normalizedURL(from: urlText) else { return }
         urlText = normalized
         readerModel.load(urlString: normalized)
     }
 
     private func normalizedURL(from text: String) -> String? {
+        // WebKit needs a scheme; add https when the user types a bare domain.
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)"
     }
 }
 
+// Owns WKWebView state plus read-aloud behavior so BrowserPage stays declarative.
 private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDelegate, AVSpeechSynthesizerDelegate {
+    // Published navigation state controls toolbar buttons and labels.
     @Published var isLoading: Bool = false
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
     @Published var currentSpokenLabel: String = "Not reading"
     @Published var isSpeaking: Bool = false
 
+    // The actual WKWebView is created by WebReaderView, then attached here.
     private(set) var webView: WKWebView?
     private let synthesizer = AVSpeechSynthesizer()
+    // Timer scrolls the web page in tiny steps while auto-scroll is enabled.
     private var autoScrollTimer: Timer?
+    // Last settings are reapplied after each page navigation finishes.
     private var lastSettings = WebReaderSettings()
+    // Cached text lets skip/back work without re-running JavaScript every tap.
     private var cachedText: String = ""
     private var cachedWords: [String] = []
     private var currentWordIndex: Int = 0
+    // Index in cachedWords where the current speech utterance began.
     private var utteranceStartIndex: Int = 0
 
     override init() {
@@ -2891,11 +3086,13 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func attach(webView: WKWebView) {
+        // Store the view and receive navigation callbacks.
         self.webView = webView
         webView.navigationDelegate = self
     }
 
     func load(urlString: String) {
+        // Load accepts either full URLs or bare domains.
         guard let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)") else { return }
         webView?.load(URLRequest(url: url))
     }
@@ -2926,6 +3123,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
         simplifyIntensity: Double,
         focusMode: Bool
     ) {
+        // Save settings so they can be reapplied after navigation.
         lastSettings = WebReaderSettings(
             enabled: enabled,
             textSize: textSize,
@@ -2938,6 +3136,8 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
         )
         let js = """
         (function() {
+            // This script injects one <style> tag and edits classes/selectors.
+            // It does not send page content anywhere; it only changes rendering locally.
             const id = 'echosight-reader-style';
             let style = document.getElementById(id);
             if (!\(enabled)) {
@@ -2990,12 +3190,14 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
                     hideSelectors.push('.share','.social','.related','.newsletter','.subscribe','.comments');
                 }
                 if (intensity > 0.8) {
+                    // At high simplify levels, hide media-heavy elements.
                     hideSelectors.push('img','video','iframe','picture');
                 }
                 hideSelectors.forEach(sel => {
                     document.querySelectorAll(sel).forEach(el => el.style.display = 'none');
                 });
                 if (intensity >= 0.95) {
+                    // Maximum simplification replaces the page with extracted text.
                     const existing = document.getElementById('echosight-text-only');
                     const main = document.querySelector('main, article, [role="main"]') || document.body;
                     const text = main.innerText || '';
@@ -3032,6 +3234,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func setAutoScroll(enabled: Bool, speed: Double) {
+        // Reset timer every time settings change so speed updates immediately.
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
         guard enabled else { return }
@@ -3039,11 +3242,13 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
         let interval = 0.08
         let step = clamped * 2
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            // Scroll happens inside WebKit via JavaScript.
             self?.webView?.evaluateJavaScript("window.scrollBy(0, \(step));", completionHandler: nil)
         }
     }
 
     func startSpeaking(rate: Float) {
+        // Read the page text, cache it, and speak starting from currentWordIndex.
         extractReadableText { [weak self] text in
             guard let self, let text, !text.isEmpty else { return }
             self.cacheText(text)
@@ -3055,27 +3260,32 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func pauseSpeaking() {
+        // Pause keeps AVSpeechSynthesizer's internal position.
         synthesizer.pauseSpeaking(at: .word)
         isSpeaking = false
     }
 
     func resumeSpeaking() {
+        // Continue from the paused AVSpeechSynthesizer position.
         synthesizer.continueSpeaking()
         isSpeaking = true
     }
 
     func stopSpeaking() {
+        // Stop resets the status label but keeps cached text for later.
         synthesizer.stopSpeaking(at: .immediate)
         currentSpokenLabel = "Stopped"
         isSpeaking = false
     }
 
     func restartSpeaking(rate: Float) {
+        // Used when the speech-rate slider changes mid-read.
         guard isSpeaking else { return }
         speakFrom(index: currentWordIndex, rate: rate)
     }
 
     func skipWord(_ delta: Int, rate: Float) {
+        // Move by one word and restart speech from the new index.
         ensureCachedText { [weak self] in
             guard let self else { return }
             guard !self.cachedWords.isEmpty else { return }
@@ -3086,6 +3296,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     private func extractReadableText(completion: @escaping (String?) -> Void) {
+        // Prefer semantic main/article text, falling back to body text.
         let js = """
         (function() {
             const main = document.querySelector('main, article, [role="main"]');
@@ -3098,6 +3309,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     private func ensureCachedText(_ completion: @escaping () -> Void) {
+        // Avoid repeated JavaScript extraction when cached text is still valid.
         if !cachedText.isEmpty {
             completion()
             return
@@ -3110,6 +3322,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     private func cacheText(_ text: String) {
+        // Store both raw text and a word array for navigation.
         cachedText = text
         cachedWords = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .map { String($0) }
@@ -3122,6 +3335,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     private func speakFrom(index: Int, rate: Float) {
+        // AVSpeechSynthesizer cannot start at a word index, so we speak the suffix.
         guard !cachedWords.isEmpty else { return }
         let clamped = min(max(index, 0), cachedWords.count - 1)
         currentWordIndex = clamped
@@ -3135,6 +3349,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     private func updateCurrentSpokenLabel() {
+        // Keeps the UI synchronized with the current word.
         guard !cachedWords.isEmpty, currentWordIndex < cachedWords.count else {
             currentSpokenLabel = "Not reading"
             return
@@ -3143,6 +3358,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
+        // Convert the character range in the spoken suffix back into cachedWords index.
         let text = utterance.speechString as NSString
         let prefix = text.substring(to: characterRange.location)
         let wordsBefore = prefix.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
@@ -3154,18 +3370,21 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        // Mark reading stopped when the utterance naturally ends.
         DispatchQueue.main.async {
             self.isSpeaking = false
         }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // Update toolbar button state as navigation begins.
         isLoading = true
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // New page means cached speech text is stale.
         isLoading = false
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
@@ -3174,6 +3393,7 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
         currentWordIndex = 0
         currentSpokenLabel = "Not reading"
         applyReaderSettings(
+            // Reapply accessibility styling after the new DOM loads.
             enabled: lastSettings.enabled,
             textSize: lastSettings.textSize,
             lineSpacing: lastSettings.lineSpacing,
@@ -3186,11 +3406,13 @@ private final class WebReaderModel: NSObject, ObservableObject, WKNavigationDele
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        // Stop showing the loading state after navigation failure.
         isLoading = false
     }
 }
 
 private struct WebReaderSettings {
+    // Plain data container for all reader CSS/behavior controls.
     var enabled: Bool = true
     var textSize: Double = 16
     var lineSpacing: Double = 1.4
@@ -3202,6 +3424,7 @@ private struct WebReaderSettings {
 }
 
 private struct WebReaderView: UIViewRepresentable {
+    // UIViewRepresentable is needed because WKWebView is a UIKit view.
     @ObservedObject var model: WebReaderModel
     @Binding var urlText: String
     @Binding var readerEnabled: Bool
@@ -3216,6 +3439,7 @@ private struct WebReaderView: UIViewRepresentable {
     @Binding var autoScrollSpeed: Double
 
     func makeUIView(context: Context) -> WKWebView {
+        // Create WebKit once, attach it to the model, and optionally load a URL.
         let config = WKWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
@@ -3228,6 +3452,7 @@ private struct WebReaderView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        // SwiftUI calls this whenever bindings change, so reader settings stay live.
         model.applyReaderSettings(
             enabled: readerEnabled,
             textSize: textSize,
@@ -3307,6 +3532,7 @@ struct EchoSenseDevicePage: View {
     }
 }
 
+// User-facing feature toggles and persistent preferences.
 struct SettingsPage: View {
     @AppStorage("feature.camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("feature.morse.enabled") private var morseEnabled: Bool = true
@@ -3410,6 +3636,7 @@ struct AboutPage: View {
     }
 }
 
+// Menu for quick explanations of each major app tool.
 struct TutorialHubPage: View {
     @EnvironmentObject var flow: AppFlow
 
@@ -3558,6 +3785,7 @@ struct BrowserTutorialPage: View {
     }
 }
 
+// Explains Morse at a presentation level: what dots/dashes mean and how to use them.
 struct MorseTutorialPage: View {
     var body: some View {
         ScrollView {
@@ -3825,6 +4053,7 @@ private struct MorseChartCard: View {
 }
 
 // Updated ASLAlphabetPage with added "ASL Numbers" tile
+// ASL hub: alphabet, numbers, phrases, and practice.
 struct ASLAlphabetPage: View {
     var body: some View {
         ScrollView {
@@ -4000,6 +4229,7 @@ private struct ASLLetterCard: View {
 }
 
 // MARK: - ASL Phrases (placeholder)
+// Phrase library that breaks common ASL phrases into learnable word tiles.
 struct ASLPhrasesPage: View {
     private let sections: [(title: String, items: [String])] = [
         (

@@ -6,18 +6,26 @@ import SwiftUI
 import CoreHaptics
 import UIKit
 
+// AudioBandsMeter powers the standalone mic visualizer.
+// It captures microphone audio, converts it into five frequency bands, and can
+// trigger haptics so sound has a tactile representation.
 final class AudioBandsMeter: ObservableObject {
-    // Published for UI
+    // Published for UI. Each band is normalized 0...1 for simple bar drawing.
     @Published var bands: [Float] = Array(repeating: 0, count: 5)   // 0...1
+    // Lets the view show whether microphone capture is active.
     @Published var isRunning: Bool = false
+    // True after a baseline noise calibration window finishes.
     @Published var calibrated: Bool = false
+    // Higher sensitivity lowers spike thresholds.
     @Published var sensitivity: Float = 1.0  // 0.6...1.8 typical
 
     // Audio
+    // AVAudioEngine delivers microphone buffers.
     private let engine = AVAudioEngine()
     private let session = AVAudioSession.sharedInstance()
 
     // FFT (classic vDSP)
+    // FFT size must be a power of two; 1024 is a good real-time compromise.
     private let fftSize: Int = 1024          // must be power of 2
     private var log2n: vDSP_Length { vDSP_Length(log2(Float(fftSize))) }
     private var fftSetup: FFTSetup?
@@ -29,9 +37,11 @@ final class AudioBandsMeter: ObservableObject {
     private var mags: [Float] = []
 
     // 5 bands: Low / Low-mid / Mid / High-mid / High
+    // Six edges define five frequency ranges.
     private let bandEdges: [Float] = [80, 250, 700, 2000, 6000, 12000] // 6 edges -> 5 bands
 
     // Calibration
+    // Baseline tracks normal room noise for each band.
     private var baseline: [Float] = Array(repeating: 0, count: 5)
     private var baselineAccum: [Float] = Array(repeating: 0, count: 5)
     private var baselineCount: Int = 0
@@ -56,9 +66,11 @@ final class AudioBandsMeter: ObservableObject {
 
     init() {
         // FFT setup
+        // vDSP_create_fftsetup builds reusable FFT lookup data for speed.
         fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
 
         // Window (Hann)
+        // Hann window reduces frequency artifacts at buffer edges.
         window = Array(repeating: 0, count: fftSize)
         vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
 
@@ -77,6 +89,7 @@ final class AudioBandsMeter: ObservableObject {
     // MARK: - Permissions + start/stop
 
     func requestPermissionAndStart() {
+        // Permission is required before AVAudioEngine can read the microphone.
         switch session.recordPermission {
         case .granted:
             start()
@@ -97,6 +110,7 @@ final class AudioBandsMeter: ObservableObject {
         guard !isRunning else { return }
 
         do {
+            // Measurement mode keeps audio processing clean for analysis.
             try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try session.setActive(true)
         } catch {
@@ -107,6 +121,7 @@ final class AudioBandsMeter: ObservableObject {
         let format = input.outputFormat(forBus: 0)
 
         input.removeTap(onBus: 0)
+        // Tap delivers exactly fftSize frames so each callback maps to one FFT.
         input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftSize), format: format) { [weak self] buffer, _ in
             self?.process(buffer: buffer, sampleRate: Float(format.sampleRate))
         }
@@ -120,6 +135,7 @@ final class AudioBandsMeter: ObservableObject {
     }
 
     func stop() {
+        // Remove tap before stopping to prevent callbacks after shutdown.
         guard isRunning else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -130,6 +146,7 @@ final class AudioBandsMeter: ObservableObject {
     // MARK: - Calibration
 
     func calibrate(seconds: TimeInterval = 2.0) {
+        // Start a short window where we average bands into the baseline.
         baselineAccum = Array(repeating: 0, count: 5)
         baselineCount = 0
         calibratingUntil = Date().addingTimeInterval(seconds)
@@ -139,6 +156,7 @@ final class AudioBandsMeter: ObservableObject {
     // MARK: - Processing
 
     private func process(buffer: AVAudioPCMBuffer, sampleRate: Float) {
+        // Processing pipeline: mic samples -> window -> FFT -> magnitudes -> bands.
         guard let fftSetup else { return }
         guard let channel = buffer.floatChannelData?.pointee else { return }
         let n = Int(buffer.frameLength)
@@ -163,6 +181,7 @@ final class AudioBandsMeter: ObservableObject {
         }
 
         // FFT in-place
+        // Real-input FFT converts time-domain audio into frequency bins.
         vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
 
         // Magnitude squared
@@ -174,12 +193,14 @@ final class AudioBandsMeter: ObservableObject {
         let newBands = computeBands(from: mags, sampleRate: sampleRate)
 
         // Smooth for UI
+        // Exponential smoothing prevents bars from jumping too harshly.
         var smoothed = bands
         for i in 0..<5 {
             smoothed[i] = (1 - smoothingAlpha) * smoothed[i] + smoothingAlpha * newBands[i]
         }
 
         // Calibration update
+        // Average smoothed band values until the calibration deadline.
         if let until = calibratingUntil {
             if Date() < until {
                 baselineCount += 1
@@ -194,20 +215,24 @@ final class AudioBandsMeter: ObservableObject {
         }
 
         // Spike detection
+        // Haptic spikes are based on smoothed values so feedback is not noisy.
         detectSpikesAndHaptics(smoothed)
 
         DispatchQueue.main.async {
+            // @Published values should be changed on the main queue.
             self.bands = smoothed
         }
     }
 
     private func computeBands(from mags: [Float], sampleRate: Float) -> [Float] {
+        // Convert FFT bin magnitudes into five user-friendly frequency bands.
         let binHz = sampleRate / Float(fftSize)
         var bandVals = Array(repeating: Float(0), count: 5)
 
         for b in 0..<5 {
             let f0 = bandEdges[b]
             let f1 = bandEdges[b + 1]
+            // Translate frequency range into FFT bin range.
             let i0 = max(1, Int(f0 / binHz))
             let i1 = min(mags.count - 1, Int(f1 / binHz))
             if i1 <= i0 { continue }
@@ -217,6 +242,7 @@ final class AudioBandsMeter: ObservableObject {
             for i in i0..<i1 { sum += mags[i] }
 
             // Compress & normalize (tune divisor if needed)
+            // log10 compression keeps loud sounds from instantly maxing the UI.
             let compressed = log10(1 + sum)
             let normalized = min(1, compressed / 6.0)
 
@@ -227,35 +253,44 @@ final class AudioBandsMeter: ObservableObject {
     }
 
     private func detectSpikesAndHaptics(_ current: [Float]) {
+        // Detect sudden band increases compared with the calibrated baseline.
         let now = Date()
+        // Global cooldown prevents multiple bands from firing haptics at once.
         let globalReady = now.timeIntervalSince(lastGlobalAlert) > globalCooldown
 
         for i in 0..<5 {
+            // If not calibrated, baseline is zero and the meter still works.
             let base = calibrated ? baseline[i] : 0
             let delta = current[i] - base
 
+            // Sensitivity lowers/raises the needed increase over baseline.
             let threshold = baseThreshold / max(0.3, sensitivity)
 
             if delta > threshold {
+                // First frame above threshold starts the hold timer.
                 if aboveSince[i] == nil { aboveSince[i] = now }
 
                 let held = now.timeIntervalSince(aboveSince[i]!) >= minHoldTime
                 let cooled = now.timeIntervalSince(lastAlertAt[i]) >= perBandCooldown
 
                 if held && cooled && globalReady {
+                    // Fire only after the sound has stayed above threshold.
                     lastAlertAt[i] = now
                     lastGlobalAlert = now
                     fireHaptic(forBand: i, strength: delta)
                 }
             } else if delta < max(0, threshold - hysteresis) {
+                // Hysteresis prevents rapid on/off flicker near the threshold.
                 aboveSince[i] = nil
             }
         }
     }
 
     private func fireHaptic(forBand band: Int, strength: Float) {
+        // Convert sound strength into a haptic intensity range.
         let intensity = min(1, max(0.2, strength * 1.5))
 
+        // Lower bands use fewer/softer pulses; higher bands feel sharper/faster.
         switch band {
         case 0: haptics.pulse(intensity: intensity, sharpness: 0.2, count: 1, spacing: 0.0)   // Low
         case 1: haptics.pulse(intensity: intensity, sharpness: 0.4, count: 2, spacing: 0.12)  // Low-mid
@@ -266,13 +301,17 @@ final class AudioBandsMeter: ObservableObject {
     }
 }
 
+// Small wrapper around Core Haptics with a UIKit fallback for devices that
+// do not support custom haptic patterns.
 final class HapticsManager {
+    // Core Haptics supports custom pulses; UIKit fallback works on more devices.
     private var engine: CHHapticEngine?
     private let fallback = UINotificationFeedbackGenerator()
 
     init() { prepare() }
 
     private func prepare() {
+        // Simulator or older devices may not support Core Haptics.
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
         do {
             engine = try CHHapticEngine()
@@ -283,6 +322,7 @@ final class HapticsManager {
     }
 
     func pulse(intensity: Float, sharpness: Float, count: Int, spacing: TimeInterval) {
+        // If custom haptics are unavailable, give a simple warning tap instead.
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics, let engine else {
             DispatchQueue.main.async { self.fallback.notificationOccurred(.warning) }
             return
@@ -290,6 +330,7 @@ final class HapticsManager {
 
         var events: [CHHapticEvent] = []
         for k in 0..<max(1, count) {
+            // Each event is a short transient pulse in the pattern.
             let t = Double(k) * spacing
             let i = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity)
             let s = CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
@@ -297,10 +338,12 @@ final class HapticsManager {
         }
 
         do {
+            // Start the pattern immediately.
             let pattern = try CHHapticPattern(events: events, parameters: [])
             let player = try engine.makePlayer(with: pattern)
             try player.start(atTime: 0)
         } catch {
+            // If the engine failed, prepare again for the next pulse.
             prepare()
         }
     }

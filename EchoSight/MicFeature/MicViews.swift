@@ -1,13 +1,19 @@
 import SwiftUI
 
+// SwiftUI screens for the Mic feature.
+// The UI stays simple while MicViewModel handles audio capture, captions,
+// sound events, history logging, and haptic alerts.
 struct MicTileView: View {
+    // Parent page owns MicViewModel; this tile observes and controls it.
     @ObservedObject var viewModel: MicViewModel
     @Environment(\.appThemeColor) private var appThemeColor
+    // Drives the small pulsing dot while listening.
     @State private var listeningPulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             NavigationLink(destination: MicDetailView(viewModel: viewModel)) {
+                // The whole card opens the detailed mic screen.
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Text("Mic")
@@ -17,6 +23,7 @@ struct MicTileView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(viewModel.isListening ? .green : .secondary)
                         Circle()
+                            // Green dot gives quick live/off status.
                             .fill(viewModel.isListening ? Color.green : Color.secondary)
                             .frame(width: 8, height: 8)
                             .scaleEffect(viewModel.isListening && listeningPulse ? 1.8 : 1.0)
@@ -31,10 +38,12 @@ struct MicTileView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         if viewModel.transcriptLines.isEmpty {
+                            // Placeholder before speech recognition has text.
                             Text("Live captions appear here.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         } else {
+                            // Compact tile shows only the formatted latest lines.
                             ForEach(viewModel.transcriptLines, id: \.self) { line in
                                 Text(line)
                                     .font(.subheadline)
@@ -46,6 +55,7 @@ struct MicTileView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             if viewModel.recentEvents.isEmpty {
+                                // Empty state keeps horizontal event strip stable.
                                 Text("No recent events")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -53,6 +63,7 @@ struct MicTileView: View {
                                     .padding(.horizontal, 10)
                                     .background(Capsule().fill(Color.secondary.opacity(0.15)))
                             } else {
+                                // Recent detected sound events from SoundEventService.
                                 ForEach(viewModel.recentEvents) { event in
                                     SoundEventChip(event: event)
                                 }
@@ -66,12 +77,14 @@ struct MicTileView: View {
             .buttonStyle(.plain)
 
             if let error = viewModel.errorBanner {
+                // Permission/audio/speech errors appear inline.
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
 
             Button(viewModel.isListening ? "Stop" : "Start") {
+                // Delegates all start/stop complexity to MicViewModel.
                 viewModel.toggleListening()
             }
             .buttonStyle(.borderedProminent)
@@ -89,6 +102,7 @@ struct MicTileView: View {
                 )
         )
         .onChange(of: viewModel.isListening) { isListening in
+            // Start/stop the pulse animation when listening changes.
             listeningPulse = isListening
         }
         .onAppear {
@@ -97,7 +111,9 @@ struct MicTileView: View {
     }
 }
 
+// Full mic screen with live transcript, detected sound events, and EQ bars.
 struct MicDetailView: View {
+    // Uses the same view model as the tile, so state stays synchronized.
     @ObservedObject var viewModel: MicViewModel
     @Environment(\.appThemeColor) private var appThemeColor
 
@@ -110,6 +126,7 @@ struct MicDetailView: View {
                         .foregroundStyle(viewModel.isListening ? .green : .secondary)
                     Spacer()
                     Button(viewModel.isListening ? "Stop" : "Start") {
+                        // Same toggle as the tile.
                         viewModel.toggleListening()
                     }
                     .buttonStyle(.borderedProminent)
@@ -117,12 +134,14 @@ struct MicDetailView: View {
                 }
 
                 Toggle("Noisy mode", isOn: $viewModel.noisyMode)
+                    // Noisy mode raises event thresholds in SoundEventService.
                     .padding(.vertical, 4)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Live Transcript")
                         .font(.headline)
                     Text(viewModel.fullTranscript.isEmpty ? "Start listening to see captions." : viewModel.fullTranscript)
+                        // Full transcript keeps all recognized speech visible.
                         .font(.body)
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -137,10 +156,12 @@ struct MicDetailView: View {
                     Text("Recent Events")
                         .font(.headline)
                     if viewModel.recentEvents.isEmpty {
+                        // Empty state before the heuristic detects sounds.
                         Text("No recent sound events detected.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
+                        // Detailed list includes timestamp and confidence.
                         ForEach(viewModel.recentEvents) { event in
                             HStack {
                                 Text(event.type.displayName)
@@ -178,7 +199,9 @@ struct MicDetailView: View {
     }
 }
 
+// Compact label for one detected sound event.
 private struct SoundEventChip: View {
+    // Small pill shown on the compact mic tile.
     let event: SoundEvent
 
     var body: some View {
@@ -193,13 +216,16 @@ private struct SoundEventChip: View {
     }
 }
 
+// Draws the five-band EQ meter used by the mic tile and detail screen.
 private struct MicEQBarsView: View {
+    // Five normalized bands from EQAnalyzer.
     let bands: [Float]
     let barColor: Color
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             ForEach(0..<min(bands.count, 5), id: \.self) { index in
+                // Height maps directly from normalized band value.
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(barColor.opacity(0.85))
                     .frame(width: 16, height: max(6, CGFloat(bands[index]) * 60))

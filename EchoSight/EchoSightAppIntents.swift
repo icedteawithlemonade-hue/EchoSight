@@ -1,22 +1,30 @@
 import AppIntents
 import Foundation
 
+// Siri Shortcuts and App Intents live here.
+// These intents configure which tool should open first, then launch the app.
+// The actual feature screens still run inside SwiftUI after the app opens.
 private enum IntentLauncher {
     @MainActor
     static func open(_ tile: StartupTile) {
+        // Store startup choice so Root/HomeView knows which screen to open.
         UserDefaults.standard.set(true, forKey: "startup.open.enabled")
         UserDefaults.standard.set(tile.rawValue, forKey: "startup.open.tile")
+        // Log locally so the Activity History explains shortcut usage.
         ActivityHistoryStore.shared.add(.system, title: "Shortcut", detail: "Prepared \(tile.title) for launch.")
     }
 }
 
 struct StartEchoSightCameraIntent: AppIntent {
+    // Text shown in Shortcuts/Siri suggestions.
     static var title: LocalizedStringResource = "Start EchoSight Camera"
     static var description = IntentDescription("Open EchoSight directly to camera assist tools.")
+    // Tells iOS to open EchoSight after the intent runs.
     static var openAppWhenRun: Bool = true
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        // Save camera as the desired startup destination.
         IntentLauncher.open(.camera)
         return .result()
     }
@@ -29,6 +37,7 @@ struct StartEchoSightMicIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        // Save mic as the desired startup destination.
         IntentLauncher.open(.mic)
         return .result()
     }
@@ -41,6 +50,7 @@ struct StartEchoSightMorseIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        // Save Morse as the desired startup destination.
         IntentLauncher.open(.morse)
         return .result()
     }
@@ -53,6 +63,7 @@ struct StartEchoSightASLIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        // Save ASL as the desired startup destination.
         IntentLauncher.open(.asl)
         return .result()
     }
@@ -60,6 +71,7 @@ struct StartEchoSightASLIntent: AppIntent {
 
 struct EchoSightShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        // AppShortcut exposes common voice phrases to Siri/Shortcuts.
         AppShortcut(
             intent: StartEchoSightCameraIntent(),
             phrases: [
